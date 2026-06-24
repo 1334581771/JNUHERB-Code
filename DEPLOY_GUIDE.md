@@ -362,6 +362,16 @@ echo 'DEEPSEEK_API_KEY=sk-你的key' | sudo tee /opt/jnuherb/.env
 
 ## 七、设置开机自动启动
 
+配置 systemd 服务后，服务器重启会自动启动 JNUHERB，无需手动运行 Docker。
+
+### 7.1 确保 Docker 本身开机自启
+
+```bash
+sudo systemctl enable docker
+```
+
+### 7.2 创建 JNUHERB 自启服务
+
 ```bash
 sudo nano /etc/systemd/system/jnuherb.service
 ```
@@ -378,20 +388,44 @@ After=docker.service
 Type=oneshot
 RemainAfterExit=yes
 WorkingDirectory=/opt/jnuherb
-ExecStart=/usr/bin/docker compose up -d
-ExecStop=/usr/bin/docker compose down
+# Use /bin/sh -c because systemd ExecStart does not handle "docker compose" subcommand reliably
+ExecStart=/bin/sh -c 'docker compose up -d'
+ExecStop=/bin/sh -c 'docker compose down'
 TimeoutStartSec=0
 
 [Install]
 WantedBy=multi-user.target
 ```
 
-启用：
+### 7.3 启用并启动服务
 
 ```bash
 sudo systemctl daemon-reload
 sudo systemctl enable jnuherb
 sudo systemctl start jnuherb
+```
+
+### 7.4 验证
+
+```bash
+sudo systemctl status jnuherb
+sudo docker compose ps
+```
+
+### 7.5 常用管理命令
+
+```bash
+# 查看状态
+sudo systemctl status jnuherb
+
+# 手动重启
+sudo systemctl restart jnuherb
+
+# 手动停止
+sudo systemctl stop jnuherb
+
+# 查看日志
+sudo journalctl -u jnuherb -f
 ```
 
 ---

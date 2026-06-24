@@ -29,6 +29,7 @@ import streamlit as st
 matplotlib.use("Agg")
 
 from jnuherb.analysis import from_proteins, from_tcm_or_formula
+from jnuherb.enrichment import extract_genes_from_result, run_enrichment
 from jnuherb.network import (
     calculate_degree,
     degree_summary,
@@ -47,6 +48,17 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+# Hide Streamlit default chrome (Deploy button, "Made with Streamlit" footer, etc.)
+_HIDE_STYLES = """
+<style>
+#MainMenu {visibility: hidden;}
+footer {visibility: hidden;}
+header {visibility: hidden;}
+.stDeployButton {display: none !important;}
+</style>
+"""
+st.markdown(_HIDE_STYLES, unsafe_allow_html=True)
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -59,6 +71,167 @@ def parse_lines(text: str) -> list[str] | None:
     vals = [v.strip() for v in text.split("\n")]
     vals = [v for v in vals if v]
     return vals if vals else None
+
+
+def _display_enrichment(
+    top_df: pd.DataFrame,
+    full_df: pd.DataFrame,
+    title: str,
+    empty_msg: str = "No enrichment terms found.",
+    download_key: Optional[str] = None,
+    show_dot: bool = True,
+) -> None:
+    """Render an enrichment result: table (top N), download CSV (full), bar + dot plots."""
+    st.markdown(f"#### {title}")
+    if top_df.empty:
+        st.info(empty_msg)
+        return
+
+    # Show top N table
+    display_cols = [c for c in ["Term", "Category", "Count", "GeneRatio", "P-value", "Adjusted P-value", "Genes"] if c in top_df.columns]
+    st.dataframe(top_df[display_cols], use_container_width=True, hide_index=True)
+
+    # CSV download of FULL results
+    if not full_df.empty:
+        full_display_cols = [c for c in ["Term", "Category", "Count", "GeneRatio", "P-value", "Adjusted P-value", "Genes"] if c in full_df.columns]
+        csv = full_df[full_display_cols].to_csv(index=False).encode("utf-8")
+        st.download_button(
+            label="📥 Download all results (CSV)",
+            data=csv,
+            file_name=f"{title.replace(' ', '_').replace('/', '_')}_all.csv",
+            mime="text/csv",
+            key=download_key or f"download_{title}",
+            use_container_width=False,
+        )
+
+    if "-log10(P)" not in top_df.columns or "Term" not in top_df.columns:
+        return
+
+    # Prepare data: sort by Count for better bar order (top first after flip)
+    plot_df = top_df.sort_values("Count", ascending=True)
+
+    # Bar plot: Term vs Count, fill by -log10(P)
+    fig_bar = px.bar(
+        plot_df,
+        y="Term",
+        x="Count",
+        orientation="h",
+        color="-log10(P)",
+        color_continuous_scale="Viridis",
+        title=f"{title} - Gene Count",
+        template="plotly_white",
+        height=400,
+        labels={"Count": "Gene count", "Term": "", "-log10(P)": "-log10(P)"},
+    )
+    fig_bar.update_layout(
+        yaxis=dict(categoryorder="total ascending"),
+        margin=dict(l=180, r=50, t=50, b=50),
+        coloraxis_colorbar=dict(title="-log10(P)"),
+    )
+    st.plotly_chart(fig_bar, use_container_width=True)
+
+    if show_dot:
+        # Dot plot: GeneRatio vs Term, size=Count, color=-log10(P)
+        fig_dot = px.scatter(
+            plot_df,
+            x="GeneRatio",
+            y="Term",
+            size="Count",
+            color="-log10(P)",
+            color_continuous_scale="Viridis",
+            title=f"{title} - Gene Ratio",
+            template="plotly_white",
+            height=400,
+            size_max=18,
+            labels={"GeneRatio": "Gene ratio", "Term": "", "-log10(P)": "-log10(P)", "Count": "Gene count"},
+        )
+        fig_dot.update_layout(
+            yaxis=dict(categoryorder="total ascending"),
+            margin=dict(l=180, r=50, t=50, b=50),
+        )
+        st.plotly_chart(fig_dot, use_container_width=True)
+
+
+def _display_go_enrichment(
+    top_df: pd.DataFrame,
+    full_df: pd.DataFrame,
+    title: str = "GO Enrichment",
+    download_key: Optional[str] = None,
+) -> None:
+    """Render GO enrichment with combined table and faceted plots."""
+    st.markdown(f"#### {title}")
+    if top_df.empty:
+        st.info("No GO enrichment terms found for the current gene set.")
+        return
+
+    # Combined table with Category column
+    display_cols = [c for c in ["Term", "Category", "Count", "GeneRatio", "P-value", "Adjusted P-value", "Genes"] if c in top_df.columns]
+    st.dataframe(top_df[display_cols], use_container_width=True, hide_index=True)
+
+    # CSV download of FULL results
+    if not full_df.empty:
+        full_display_cols = [c for c in ["Term", "Category", "Count", "GeneRatio", "P-value", "Adjusted P-value", "Genes"] if c in full_df.columns]
+        csv = full_df[full_display_cols].to_csv(index=False).encode("utf-8")
+        st.download_button(
+            label="📥 Download all GO results (CSV)",
+            data=csv,
+            file_name="GO_Enrichment_all.csv",
+            mime="text/csv",
+            key=download_key or "download_go_all",
+            use_container_width=False,
+        )
+
+    if "-log10(P)" not in top_df.columns or "Term" not in top_df.columns:
+        return
+
+    # Category-colored bar chart (stacked style by category)
+    plot_df = top_df.sort_values(["Category", "Count"], ascending=[True, True])
+    category_order = ["BP", "CC", "MF"]
+    plot_df["Category"] = pd.Categorical(plot_df["Category"], categories=category_order, ordered=True)
+    plot_df = plot_df.sort_values(["Category", "Count"])
+
+    fig_bar = px.bar(
+        plot_df,
+        y="Term",
+        x="Count",
+        orientation="h",
+        color="Category",
+        color_discrete_map={"BP": "#B2182B", "CC": "#F4A582", "MF": "#FDDBC7"},
+        title=f"{title} - Gene Count by Ontology",
+        template="plotly_white",
+        height=500,
+        labels={"Count": "Gene count", "Term": "", "Category": "Ontology"},
+        category_orders={"Category": category_order},
+    )
+    fig_bar.update_layout(
+        yaxis=dict(categoryorder="total ascending"),
+        margin=dict(l=180, r=50, t=50, b=50),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+    )
+    st.plotly_chart(fig_bar, use_container_width=True)
+
+    # Faceted dot plot by Category
+    fig_dot = px.scatter(
+        plot_df,
+        x="GeneRatio",
+        y="Term",
+        size="Count",
+        color="-log10(P)",
+        color_continuous_scale=[[0, "#f7ca64"], [0.5, "#46bac2"], [1, "#7e62a3"]],
+        facet_row="Category",
+        title=f"{title} - Gene Ratio (facet by Ontology)",
+        template="plotly_white",
+        height=600,
+        size_max=16,
+        labels={"GeneRatio": "Gene ratio", "Term": "", "-log10(P)": "-log10(P)", "Count": "Gene count"},
+        category_orders={"Category": category_order},
+    )
+    fig_dot.update_layout(
+        yaxis=dict(categoryorder="total ascending"),
+        margin=dict(l=180, r=50, t=80, b=50),
+    )
+    fig_dot.update_yaxes(matches=None)
+    st.plotly_chart(fig_dot, use_container_width=True)
 
 
 # ---------------------------------------------------------------------------
@@ -172,21 +345,11 @@ else:
         key="reverse_score",
     )
 
-# ---- Common parameters ----
-st.sidebar.markdown("---")
-st.sidebar.subheader("Optimization Parameters")
-opt_num = st.sidebar.number_input(
-    "Optimization Iterations", value=100, min_value=10, max_value=5000,
-)
-opt_seed = st.sidebar.number_input(
-    "Random Seed", value=138192, min_value=0,
-)
-tcm_opt_enabled = st.sidebar.checkbox(
-    "TCM Combination Optimization", value=True,
-)
-fml_opt_enabled = st.sidebar.checkbox(
-    "Formula Combination Optimization", value=True,
-)
+# Optimization defaults (previously exposed in sidebar; now hidden)
+opt_num = 1000
+opt_seed = 138192
+tcm_opt_enabled = True
+fml_opt_enabled = True
 
 st.sidebar.markdown("---")
 run_btn = st.sidebar.button(
@@ -512,6 +675,7 @@ if run_btn:
                 fml_comp=False,
                 output_dir=str(output_dir),
             )
+            st.session_state.pop("enr_results", None)
     else:
         proteins = parse_lines(reverse_text)
         if not proteins:
@@ -530,6 +694,7 @@ if run_btn:
                 fml_comp=fml_opt_enabled,
                 output_dir=str(output_dir),
             )
+            st.session_state.pop("enr_results", None)
 
 # ---------------------------------------------------------------------------
 # Tabs
@@ -543,6 +708,9 @@ tabs = st.tabs([
     "🔗 Network Viz",
     "🔍 Formula Filter",
     "📊 Degree Stats",
+    "🧬 DO Enrichment",
+    "🧬 KEGG Enrichment",
+    "🧬 GO Enrichment",
     "⚙️ Optimization",
 ])
 
@@ -1061,8 +1229,97 @@ with tabs[7]:
         else:
             st.info("Degree statistics not available.")
 
-# ---- Tab 8: Optimization ----
+# ---- Tab 8: DO Enrichment ----
 with tabs[8]:
+    st.subheader("🧬 DO Enrichment")
+    st.markdown("Based on the **Protein Results** from the current analysis.")
+
+    if result is None:
+        st.info("👈 Run a Forward/Reverse analysis first.")
+    else:
+        genes = extract_genes_from_result(result)
+        if not genes:
+            st.info("No protein genes available for enrichment.")
+        else:
+            st.caption(f"{len(genes)} unique gene(s) extracted from Protein Results.")
+            if "enr_results" not in st.session_state:
+                with st.spinner("Running DO enrichment..."):
+                    st.session_state.enr_results = run_enrichment(genes)
+
+            enr = st.session_state.enr_results
+            st.write(
+                f"Gene mapping: {enr['do']['n_mapped']} / {enr['do']['n_input']} "
+                f"genes matched to DO background gene sets."
+            )
+            _display_enrichment(
+                enr["do"]["top"],
+                enr["do"]["full"],
+                "Disease Ontology / OMIM (Top 10)",
+                empty_msg="No disease ontology terms found for the current gene set.",
+                download_key="download_do",
+            )
+
+# ---- Tab 9: KEGG Enrichment ----
+with tabs[9]:
+    st.subheader("🧬 KEGG Enrichment")
+    st.markdown("Based on the **Protein Results** from the current analysis.")
+
+    if result is None:
+        st.info("👈 Run a Forward/Reverse analysis first.")
+    else:
+        genes = extract_genes_from_result(result)
+        if not genes:
+            st.info("No protein genes available for enrichment.")
+        else:
+            st.caption(f"{len(genes)} unique gene(s) extracted from Protein Results.")
+            if "enr_results" not in st.session_state:
+                with st.spinner("Running KEGG enrichment..."):
+                    st.session_state.enr_results = run_enrichment(genes)
+
+            enr = st.session_state.enr_results
+            st.write(
+                f"Gene mapping: {enr['kegg']['n_mapped']} / {enr['kegg']['n_input']} "
+                f"genes matched to KEGG background gene sets."
+            )
+            _display_enrichment(
+                enr["kegg"]["top"],
+                enr["kegg"]["full"],
+                "KEGG Pathways (Top 10)",
+                empty_msg="No KEGG pathways found for the current gene set.",
+                download_key="download_kegg",
+            )
+
+# ---- Tab 10: GO Enrichment ----
+with tabs[10]:
+    st.subheader("🧬 GO Enrichment")
+    st.markdown("Based on the **Protein Results** from the current analysis.")
+
+    if result is None:
+        st.info("👈 Run a Forward/Reverse analysis first.")
+    else:
+        genes = extract_genes_from_result(result)
+        if not genes:
+            st.info("No protein genes available for enrichment.")
+        else:
+            st.caption(f"{len(genes)} unique gene(s) extracted from Protein Results.")
+            if "enr_results" not in st.session_state:
+                with st.spinner("Running GO enrichment..."):
+                    st.session_state.enr_results = run_enrichment(genes)
+
+            enr = st.session_state.enr_results
+            st.write(
+                f"Gene mapping: {enr['go']['n_mapped']} / {enr['go']['n_input']} "
+                f"genes matched to GO background gene sets."
+            )
+            _display_go_enrichment(
+                enr["go"]["top"],
+                enr["go"]["full"],
+                title="GO Enrichment (BP/CC/MF Top 3 each)",
+                download_key="download_go",
+            )
+
+# ---- Tab 11: Optimization ----
+with tabs[11]:
     if result is None:
         st.info("Run analysis first.")
     elif is_fwd:

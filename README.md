@@ -58,12 +58,16 @@ jnuherb.launch_app()  # Opens http://127.0.0.1:8501
 
 The Streamlit app provides:
 - **Overview**: Analysis summary and metrics
+- **AI Consultation**: DeepSeek-powered TCM syndrome differentiation with knowledge-graph validation
 - **TCM Results**: Interactive table and score distribution plots
 - **Chemical Results**: Chemical ingredients with Importance Scores
 - **Protein Results**: Target proteins and degree statistics
 - **Network Viz**: Interactive drag-and-drop network visualization
 - **Formula Filter**: Filter results to your formula of interest
 - **Degree Stats**: Degree distribution boxplots and bar charts
+- **DO Enrichment**: Disease Ontology enrichment of protein targets
+- **KEGG Enrichment**: KEGG pathway enrichment of protein targets
+- **GO Enrichment**: GO BP/CC/MF enrichment of protein targets
 - **Optimization**: Optimal TCM/formula combination suggestions
 
 ## Features
@@ -72,6 +76,7 @@ The Streamlit app provides:
 - **Reverse Network Pharmacology Analysis**: From target proteins to chemicals to TCMs to formulas
 - **HerbiV Score Calculation**: Probability-union scoring for evaluating TCM/formula effects
 - **Combination Optimization**: Knapsack-based algorithm for optimal TCM/formula combinations
+- **Functional Enrichment Analysis**: Offline KEGG/GO/DO enrichment of protein targets with bundled gene sets
 - **Network Visualization**: Cytoscape-compatible CSV export and interactive D3.js HTML graphs
 - **Built-in Database**: Over 578,000 records across 7 CSV datasets
 - **Monomer Query Support**: Query targets for individual chemical compounds (e.g., deoxyshikonin)

@@ -247,7 +247,7 @@ docker compose down
 
 ---
 
-## 六、Streamlit 界面全览 (9 个标签页)
+## 六、Streamlit 界面全览 (12 个标签页)
 
 | 标签 | 功能 |
 |------|------|
@@ -259,6 +259,9 @@ docker compose down
 | 🔗 **Network Viz** | Plotly 核心子网络（Top-100 节点）、Cytoscape 导出引导 |
 | 🔍 **Formula Filter** | 反向模式的方剂过滤子网络（边+节点表） |
 | 📊 **Degree Stats** | 度分布箱线图、Top-20 节点条形图、完整度表 |
+| 🧬 **DO Enrichment** | Disease Ontology 富集分析、条形图/散点图、CSV 下载 |
+| 🧬 **KEGG Enrichment** | KEGG 通路富集分析、条形图/散点图、CSV 下载 |
+| 🧬 **GO Enrichment** | GO BP/CC/MF 富集分析、分面条形图/散点图、CSV 下载 |
 | ⚙️ **Optimization** | TCM/方剂组合优化结果、Boost 图表 |
 
 ---
@@ -300,3 +303,166 @@ dependencies = [
 4. **DFS 过滤**: 4 层嵌套遍历确保只保留完整通路节点
 5. **缓存策略**: `@st.cache_data` 加速分析；`importlib.resources` + dict 缓存 CSV
 6. **AI JSON 解析**: 支持 clean JSON、```json  fences、嵌入式 JSON 三种格式
+
+---
+
+## 十、开发与部署记录
+
+> 本节记录 JNUHERB 项目从原型到可部署版本过程中的关键变更、踩坑与解决方案，便于后续维护迭代时查阅。
+
+### 10.1 项目命名统一化
+
+- **时间**: 2026-06
+- **背景**: 原始 R 包名为 `herbtar`，Python 重构版决定统一使用 `jnuherb`。
+- **操作**: 全局替换项目中所有 `herbtar` 为 `jnuherb`，包括代码引用、CSV 文件名、`README.md`、`WORKFLOW.md`、SCI 手稿等。
+- **例外**: `README.md` 中保留了一句历史说明——"This Python package is a conversion of the R package `herbtar`..."，以说明项目渊源。
+- **验证**: 全项目搜索 `herbtar` 仅剩 README 中的历史引用；30 个单元测试全部通过。
+
+### 10.2 SCI 论文框架与手稿
+
+- **时间**: 2026-06
+- **目标**: 参照 *Nucleic Acids Research* Web Server issue 的写法，为 JNUHERB 撰写 SCI 论文。
+- **核心卖点**: Python 生态 + Streamlit Web 界面 + AI 辨证 + 知识图谱验证 + 网络药理学三位一体。
+- **文件**: [JNUHERB_SCI_manuscript.md](JNUHERB_SCI_manuscript.md)
+- **后续需补充**: 真实作者信息、GitHub/在线服务器 URL、HerbiV 原 R 包正确引用。
+
+### 10.3 京东云轻量云主机部署
+
+- **环境**: Ubuntu 22.04 / 2核4G / 已装 nginx
+- **部署方式**: Docker + Docker Compose
+- **关键踩坑记录**:
+  - **Docker 官方源访问失败**: `Could not handshake: Error in the pull function` → 改用**阿里云 Docker 源**安装。
+  - **`docker-compose` 命令不存在**: 新版 Docker 使用 `docker compose`（空格）。
+  - **Docker Hub 拉镜像超时/403**: 配置 **Docker 国内镜像加速**（中科大、网易、百度、Daocloud）。
+  - **pip 安装依赖超时**: `files.pythonhosted.org` 访问慢 → 在 `Dockerfile` 中配置 `PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/`。
+- **部署文件**: [DEPLOY_GUIDE.md](DEPLOY_GUIDE.md)
+
+### 10.4 运行时 Bug 修复
+
+#### Bug 1: `--server.headless` 参数错误
+- **现象**: 容器反复 `Restarting`，日志报错 `Error: Option '--server.headless' requires an argument.`
+- **原因**: 新版 Streamlit 中 `--server.headless` 必须带 `true`/`false` 值。
+- **修复**: `src/jnuherb/app.py` 和 `app_entrypoint.py` 中改为 `--server.headless=true`。
+
+#### Bug 2: matplotlib `boxplot` 的 `labels` 参数报错
+- **现象**: `TypeError: Axes.boxplot() got an unexpected keyword argument 'labels'`
+- **原因**: matplotlib 3.10+ 中 `boxplot` 的 `labels` 参数被移除/改名。
+- **修复**: `src/jnuherb/data/streamlit_app.py` 中改为 `ax.boxplot(data_groups)` + `ax.set_xticklabels(list(attrs))`。
+
+### 10.5 Docker 镜像缓存导致代码更新不生效
+
+- **现象**: 本地修改上传后，网页仍显示旧版本。
+- **原因**: Docker build 的缓存层导致容器内代码未更新。
+- **解决方案**:
+  ```bash
+  sudo docker compose down
+  sudo docker image rm jnuherb:latest
+  sudo docker compose build --no-cache
+  sudo docker compose up -d
+  ```
+- **临时应急**: 直接进入运行中的容器修改文件，但重建后会丢失。
+
+### 10.6 功能富集分析（Enrichment）开发
+
+- **时间**: 2026-06
+- **需求**: 基于 Protein Results 自动进行 DO / KEGG / GO 富集分析，用条形图和散点图展示，支持 CSV 下载。
+- **实现**:
+  - 新增 `src/jnuherb/enrichment.py`，基于 `gseapy` 和本地 GMT 基因集文件做离线富集。
+  - 新增 `src/jnuherb/data/enrichment/*.gmt` 数据文件（GO BP/CC/MF、KEGG、OMIM Disease）。
+  - 在 `streamlit_app.py` 中新增 3 个标签页：DO Enrichment、KEGG Enrichment、GO Enrichment。
+  - GO 富集将 BP/CC/MF 合并展示，增加 `Category` 列，并采用分面图。
+- **筛选条件**: 按原始 **P-value** 排序，而不是 Adjusted P-value。
+- **下载策略**: 网页展示 Top N，CSV 下载完整结果。
+- **标签页顺序**: 经过多次调整后定为：Overview → AI → TCM → Chemical → Protein → Network → Formula Filter → Degree Stats → DO Enrichment → KEGG Enrichment → GO Enrichment → Optimization。
+
+### 10.7 UI 调整
+
+- **移除右侧/左侧边栏的 Optimization Parameters**: 将 `Optimization Iterations`、`Random Seed`、TCM/Formula 优化开关从 sidebar 移除，改为内部默认值。
+- **Optimization tab 移到最右侧**: 标签页顺序见 10.6。
+- **隐藏 Streamlit 默认 chrome**: 通过 `.streamlit/config.toml` 的 `toolbarMode = "viewer"` 和注入 CSS，隐藏 Deploy、Rerun、Auto rerun、Clear cache、Print、Record screen 及 "Made with Streamlit" footer。
+
+### 10.8 开机自启配置
+
+- **目标**: 服务器重启后自动启动 JNUHERB，无需手动运行 Docker。
+- **方案**: 创建 systemd 服务 `/etc/systemd/system/jnuherb.service`。
+- **注意点**: systemd 的 `ExecStart` 对 `docker compose` 子命令支持不稳定，需用 `/bin/sh -c` 包装：
+  ```ini
+  ExecStart=/bin/sh -c 'docker compose up -d'
+  ExecStop=/bin/sh -c 'docker compose down'
+  ```
+- **完整服务文件示例**:
+  ```ini
+  [Unit]
+  Description=JNUHERB Streamlit Application
+  Requires=docker.service
+  After=docker.service
+
+  [Service]
+  Type=oneshot
+  RemainAfterExit=yes
+  WorkingDirectory=/opt/jnuherb
+  ExecStart=/bin/sh -c 'docker compose up -d'
+  ExecStop=/bin/sh -c 'docker compose down'
+  TimeoutStartSec=0
+
+  [Install]
+  WantedBy=multi-user.target
+  ```
+- **启用命令**:
+  ```bash
+  sudo systemctl enable docker
+  sudo systemctl daemon-reload
+  sudo systemctl enable jnuherb
+  sudo systemctl start jnuherb
+  ```
+- **验证**: `sudo systemctl status jnuherb` 和 `sudo docker compose ps`
+- **常用命令**:
+  ```bash
+  sudo systemctl restart jnuherb   # 手动重启
+  sudo systemctl stop jnuherb      # 手动停止
+  sudo journalctl -u jnuherb -f    # 查看日志
+  ```
+
+### 10.9 本地 ↔ 服务器更新工作流
+
+推荐的标准流程：
+
+```powershell
+# 1. 本地修改并测试
+# 2. 上传到服务器（推荐删掉重传，最干净）
+ssh root@111.228.21.145
+sudo rm -rf /opt/jnuherb
+exit
+
+rsync -avz --delete `
+  --exclude='.git' `
+  --exclude='__pycache__' `
+  --exclude='*.pyc' `
+  /d/herbtar/jnuherb/ `
+  root@111.228.21.145:/opt/jnuherb/
+
+# 3. 服务器上强制重建
+ssh root@111.228.21.145
+cd /opt/jnuherb
+sudo docker compose down
+sudo docker image rm jnuherb:latest 2>/dev/null || true
+sudo docker compose build --no-cache
+sudo docker compose up -d
+
+# 4.验证
+sudo docker compose ps
+sudo docker compose logs -f
+```
+浏览器访问：http://111.228.21.145:8501
+
+### 10.10 未来待办
+
+- [ ] 补充 SCI 手稿中的真实作者、单位、GitHub URL、在线服务器地址
+- [ ] 考虑将 DO 富集数据库从 OMIM 扩展到 DisGeNET（数据更全，但文件更大）
+- [ ] 将 KEGG/GO/DO 富集结果写入结果目录 CSV，便于批量分析
+- [ ] 优化大型网络在 Streamlit 中的渲染性能
+- [ ] 增加用户上传自定义基因集/通路集进行富集分析的功能
+
+---
+
+*Last updated: 2026-06-24*

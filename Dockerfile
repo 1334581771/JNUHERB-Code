@@ -18,8 +18,10 @@ LABEL org.opencontainers.image.description="TCM Network Pharmacology Analysis We
 LABEL org.opencontainers.image.version="0.1.0"
 
 # ---- System dependencies ----
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl \
+RUN sed -i 's|http://deb.debian.org/debian|https://mirrors.aliyun.com/debian|g' /etc/apt/sources.list.d/debian.sources \
+    && sed -i 's|http://deb.debian.org/debian-security|https://mirrors.aliyun.com/debian-security|g' /etc/apt/sources.list.d/debian.sources \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/*
 
 # ---- App user (non-root) ----
@@ -29,6 +31,12 @@ WORKDIR /home/jnuherb
 
 ENV PATH="/home/jnuherb/.local/bin:${PATH}"
 
+# Configure pip to use Aliyun mirror for faster builds inside China
+ENV PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
+ENV PIP_TRUSTED_HOST=mirrors.aliyun.com
+ENV PIP_TIMEOUT=120
+ENV PIP_DEFAULT_TIMEOUT=120
+
 # ---- Install Python dependencies (layer caching) ----
 COPY --chown=jnuherb:jnuherb pyproject.toml /home/jnuherb/app/pyproject.toml
 RUN pip install --no-cache-dir --user \
@@ -37,7 +45,9 @@ RUN pip install --no-cache-dir --user \
     matplotlib>=3.7.0 \
     seaborn>=0.12.0 \
     plotly>=5.14.0 \
-    streamlit>=1.28.0
+    streamlit>=1.28.0 \
+    gseapy>=1.0.0 \
+    requests>=2.28.0
 
 # ---- Copy and install the package ----
 COPY --chown=jnuherb:jnuherb src/ /home/jnuherb/app/src/

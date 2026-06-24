@@ -12,6 +12,12 @@ headless = true
 gatherUsageStats = false
 serverAddress = "0.0.0.0"
 
+[client]
+# Hide the default Streamlit toolbar items (Deploy, Rerun, Auto rerun, Clear cache, Print, Record screen)
+toolbarMode = "viewer"
+showErrorDetails = false
+showSidebarNavigation = true
+
 [theme]
 primaryColor = "#3c8dbc"
 backgroundColor = "#f4f6f9"

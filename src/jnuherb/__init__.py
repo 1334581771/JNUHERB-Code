@@ -76,6 +76,12 @@ from jnuherb.output import (
     vis_network,
 )
 
+# Enrichment analysis
+from jnuherb.enrichment import (
+    extract_genes_from_result,
+    run_enrichment,
+)
+
 # Pipeline
 from jnuherb.pipeline import (
     herb_analysis,

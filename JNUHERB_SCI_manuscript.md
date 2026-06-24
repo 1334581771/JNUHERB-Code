@@ -16,7 +16,7 @@ First Author<sup>1,†</sup>, Second Author<sup>1,†</sup>, Third Author<sup>1<
 
 **Motivation:** Network pharmacology has become a pivotal approach for decoding the multi-component, multi-target mechanisms of traditional Chinese medicine (TCM). However, the majority of existing resources are implemented as R packages, command-line scripts, or static databases, creating a barrier for Python-oriented researchers and clinicians who require intuitive web interfaces. In addition, conventional tools rarely bridge the gap between TCM syndrome differentiation (a core concept in clinical TCM reasoning) and modern molecular target analysis.
 
-**Results:** We present JNUHERB, an open-source, interactive web server that integrates a structured TCM knowledge graph, classical network pharmacology algorithms, and a large language model (LLM)-assisted syndrome differentiation module. JNUHERB contains 578,000+ curated records spanning 6,200 formulas, 4,700 herbs, 13,100 chemical ingredients, and 14,200 protein targets. The platform supports bidirectional network pharmacology analysis (from herbs/formulas/monomers to targets, and vice versa), HerbiV probability-union scoring, knapsack-based combination optimization, and interactive network visualization. A dedicated AI consultation module translates natural-language symptom descriptions into standardized TCM syndromes and recommended herbs/formulas, with all recommendations cross-validated against the internal knowledge graph to mitigate hallucination. JNUHERB is implemented in Python 3.9+ and provides 23 public APIs, a Streamlit-based graphical interface with nine functional panels, and reproducible deployment via Docker.
+**Results:** We present JNUHERB, an open-source, interactive web server that integrates a structured TCM knowledge graph, classical network pharmacology algorithms, and a large language model (LLM)-assisted syndrome differentiation module. JNUHERB contains 578,000+ curated records spanning 6,200 formulas, 4,700 herbs, 13,100 chemical ingredients, and 14,200 protein targets. The platform supports bidirectional network pharmacology analysis (from herbs/formulas/monomers to targets, and vice versa), HerbiV probability-union scoring, knapsack-based combination optimization, interactive network visualization, and offline functional enrichment analysis of protein targets (KEGG, Gene Ontology, and Disease Ontology). A dedicated AI consultation module translates natural-language symptom descriptions into standardized TCM syndromes and recommended herbs/formulas, with all recommendations cross-validated against the internal knowledge graph to mitigate hallucination. JNUHERB is implemented in Python 3.9+ and provides 23 public APIs, a Streamlit-based graphical interface with twelve functional panels, offline functional enrichment via bundled GMT gene-set files, and reproducible deployment via Docker with automatic startup.
 
 **Availability:** JNUHERB is freely available at [URL]. The source code, documentation, example datasets, and Docker images are distributed under the MIT license at https://github.com/[username]/jnuherb.
 
@@ -96,9 +96,11 @@ JNUHERB is implemented entirely in Python 3.9+ and follows modern Python packagi
 
 The public API exposes 23 functions organized into five layers: query (7 functions), analysis (3 functions), scoring (2 functions), network analysis and visualization (7 functions), output (2 functions), pipeline (1 function), and GUI launching (1 function).
 
-The Streamlit web interface contains nine panels: Overview, AI Consultation, TCM Results, Chemical Results, Protein Results, Network Visualization, Formula Filter, Degree Statistics, and Optimization. It supports interactive Plotly network views, Cytoscape-compatible CSV export, and publication-ready static figures.
+The Streamlit web interface contains twelve panels: Overview, AI Consultation, TCM Results, Chemical Results, Protein Results, Network Visualization, Formula Filter, Degree Statistics, DO Enrichment, KEGG Enrichment, GO Enrichment, and Optimization. It supports interactive Plotly network views, Cytoscape-compatible CSV export, and publication-ready static figures.
 
-Deployment options include local pip installation (`pip install -e .`), command-line launch (`jnuherb --port 8501`), Docker, Docker Compose, and Streamlit Cloud. The project is released under the MIT license.
+Functional enrichment is performed offline through gseapy against locally bundled GMT files (KEGG, GO BP/CC/MF, and Disease Ontology), so no external network access is required after installation. The web interface also hides default Streamlit chrome (Deploy button, footer, header) to provide a clean, application-like experience.
+
+Deployment options include local pip installation (`pip install -e .`), command-line launch (`jnuherb --port 8501`), Docker, Docker Compose, and Streamlit Cloud. A systemd service is provided so that the container starts automatically on server boot. The project is released under the MIT license.
 
 ---
 
@@ -114,7 +116,7 @@ The knowledge graph contains 38,141 nodes and 539,699 relationships across the f
 
 ### 3.3 Web server features
 
-The Streamlit interface is organized into nine functional panels (Figure 2):
+The Streamlit interface is organized into twelve functional panels (Figure 2):
 
 - **Overview** introduces analysis modes and summarizes results.
 - **AI Consultation** accepts symptom descriptions, returns structured TCM reasoning, and validates recommendations against the knowledge graph.
@@ -124,6 +126,7 @@ The Streamlit interface is organized into nine functional panels (Figure 2):
 - **Network Visualization** renders the top-100 core nodes as an interactive Plotly graph and provides Cytoscape export guidance.
 - **Formula Filter** enables subnetwork filtering by formula composition in reverse-analysis mode.
 - **Degree Statistics** provides degree-distribution boxplots and top-node bar charts.
+- **DO Enrichment**, **KEGG Enrichment**, and **GO Enrichment** perform offline over-representation analysis on protein targets using bundled gene-set files, presenting ranked terms together with bar plots, dot plots, and downloadable CSV files.
 - **Optimization** reports knapsack-optimized herb/formula combinations and boost charts.
 
 All panels are linked by a shared analysis state, allowing users to move from AI consultation to forward analysis to network visualization without re-entering data.
@@ -138,7 +141,9 @@ Step 2: Forward molecular analysis. The validated formula *Gui Pi Tang* is forwa
 
 Step 3: Scoring and optimization. HerbiV scoring ranks herbs and compounds by their multi-target importance. The knapsack optimizer recommends a core subset of four herbs that maximizes target coverage while minimizing redundancy.
 
-Step 4: Visualization. The resulting herb-chemical-target network is rendered as an interactive Plotly graph, and a Cytoscape-compatible file pair is exported for further customization (Figure 3).
+Step 4: Functional enrichment. The 156 protein targets are automatically forwarded to the enrichment panels, which report top KEGG pathways, GO biological process/cellular component/molecular function terms, and Disease Ontology terms using bundled human gene-set files. Results are visualized as horizontal bar charts and dot plots and can be exported as CSV files.
+
+Step 5: Visualization and optimization. The resulting herb-chemical-target network is rendered as an interactive Plotly graph, and a Cytoscape-compatible file pair is exported for further customization (Figure 3). The knapsack optimizer recommends a core subset of four herbs that maximizes target coverage while minimizing redundancy.
 
 This case demonstrates how JNUHERB connects macroscopic TCM syndrome differentiation with microscopic target analysis in a reproducible workflow.
 
@@ -172,7 +177,11 @@ JNUHERB is an open-source, interactive Python web server for TCM network pharmac
 
 ## Data availability
 
-The JNUHERB web server is freely available at [URL]. The source code, documentation, example datasets, and Docker images are hosted at https://github.com/[username]/jnuherb under the MIT license. The built-in database is distributed as seven CSV files within the Python package and can be used offline after installation.
+The JNUHERB web server is freely available at [URL]. The source code, documentation, example datasets, Docker images, and deployment guides are hosted at https://github.com/[username]/jnuherb under the MIT license. The built-in database is distributed as seven CSV files within the Python package and can be used offline after installation. Offline enrichment analysis requires the bundled GMT files (KEGG, GO BP/CC/MF, and Disease Ontology), which are also shipped inside the package.
+
+## Implementation
+
+JNUHERB is implemented in pure Python (3.9+) using `pandas`, `NumPy`, `matplotlib`, `seaborn`, `plotly`, `gseapy`, and `Streamlit`. The package uses a standard `src/` layout and is configured via `pyproject.toml`. Container deployment is supported through a multi-stage Dockerfile and `docker-compose.yml`; a systemd service template enables automatic startup after server reboot. Chinese users can optionally enable Aliyun apt/pip mirrors and Docker Hub mirror acceleration by following the provided deployment guide.
 
 ---
 
@@ -216,9 +225,9 @@ F.A. and S.A. contributed equally to software development, data curation, and ma
 
 ## Figure captions
 
-**Figure 1.** Overview of the JNUHERB architecture. The platform is organized into four layers: (A) the curated knowledge graph containing formulas, herbs, chemicals, and proteins; (B) the algorithm layer implementing query resolution, bidirectional network construction, HerbiV scoring, and combination optimization; (C) the Python API layer exposing 23 public functions; and (D) the Streamlit web layer providing nine interactive analysis panels.
+**Figure 1.** Overview of the JNUHERB architecture. The platform is organized into four layers: (A) the curated knowledge graph containing formulas, herbs, chemicals, and proteins; (B) the algorithm layer implementing query resolution, bidirectional network construction, HerbiV scoring, and combination optimization; (C) the Python API layer exposing 23 public functions; and (D) the Streamlit web layer providing twelve interactive analysis panels.
 
-**Figure 2.** The JNUHERB Streamlit web interface. (A) Overview panel for selecting analysis modes and viewing result summaries. (B) AI Consultation panel showing natural-language symptom input, LLM-generated syndrome differentiation, and knowledge-graph validation of recommended herbs and formulas. (C) TCM Results panel with interactive tables and score distributions. (D) Network Visualization panel rendering the top-100 core nodes as a Plotly graph. (E) Optimization panel displaying knapsack-recommended herb/formula combinations.
+**Figure 2.** The JNUHERB Streamlit web interface. (A) Overview panel for selecting analysis modes and viewing result summaries. (B) AI Consultation panel showing natural-language symptom input, LLM-generated syndrome differentiation, and knowledge-graph validation of recommended herbs and formulas. (C) TCM Results panel with interactive tables and score distributions. (D) Protein Results panel. (E) Network Visualization panel rendering the top-100 core nodes as a Plotly graph. (F) Formula Filter and Degree Statistics panels. (G) DO, KEGG, and GO Enrichment panels showing ranked terms, bar charts, dot plots, and CSV download options. (H) Optimization panel displaying knapsack-recommended herb/formula combinations.
 
 **Figure 3.** Case study of the symptom pattern "heart-and-spleen deficiency." (A) AI-generated syndrome and validated formula recommendations. (B) Forward analysis of *Gui Pi Tang* showing herb-chemical (orange), chemical-protein (green), and formula-herb (blue) relationships. (C) Top-20 target proteins ranked by HerbiV importance score. (D) Optimized four-herb combination recommended by the knapsack algorithm.
 
@@ -250,6 +259,7 @@ F.A. and S.A. contributed equally to software development, data curation, and ma
 | AI syndrome differentiation | No | No | No | No | No | Yes |
 | Knowledge-graph validation | No | No | No | No | No | Yes |
 | Combination optimization | No | No | No | No | Yes | Yes |
+| Functional enrichment (KEGG/GO/DO) | No | No | No | No | No | Yes |
 | Offline deployment | No | No | No | No | Yes | Yes |
 
 ---
