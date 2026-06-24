@@ -1,0 +1,257 @@
+# JNUHERB: an interactive Python-based web server for network pharmacology analysis of traditional Chinese medicine with AI-assisted syndrome differentiation
+
+**Authors** (template; please fill in)
+
+First Author<sup>1,†</sup>, Second Author<sup>1,†</sup>, Third Author<sup>1</sup>, Corresponding Author<sup>1,*</sup>
+
+<sup>1</sup> Jiangxi Normal University, College of XXX, Nanchang 330022, China
+
+<sup>†</sup> These authors contributed equally to this work.
+
+<sup>*</sup> To whom correspondence should be addressed. Email: xxx@jxnu.edu.cn
+
+---
+
+## Abstract
+
+**Motivation:** Network pharmacology has become a pivotal approach for decoding the multi-component, multi-target mechanisms of traditional Chinese medicine (TCM). However, the majority of existing resources are implemented as R packages, command-line scripts, or static databases, creating a barrier for Python-oriented researchers and clinicians who require intuitive web interfaces. In addition, conventional tools rarely bridge the gap between TCM syndrome differentiation (a core concept in clinical TCM reasoning) and modern molecular target analysis.
+
+**Results:** We present JNUHERB, an open-source, interactive web server that integrates a structured TCM knowledge graph, classical network pharmacology algorithms, and a large language model (LLM)-assisted syndrome differentiation module. JNUHERB contains 578,000+ curated records spanning 6,200 formulas, 4,700 herbs, 13,100 chemical ingredients, and 14,200 protein targets. The platform supports bidirectional network pharmacology analysis (from herbs/formulas/monomers to targets, and vice versa), HerbiV probability-union scoring, knapsack-based combination optimization, and interactive network visualization. A dedicated AI consultation module translates natural-language symptom descriptions into standardized TCM syndromes and recommended herbs/formulas, with all recommendations cross-validated against the internal knowledge graph to mitigate hallucination. JNUHERB is implemented in Python 3.9+ and provides 23 public APIs, a Streamlit-based graphical interface with nine functional panels, and reproducible deployment via Docker.
+
+**Availability:** JNUHERB is freely available at [URL]. The source code, documentation, example datasets, and Docker images are distributed under the MIT license at https://github.com/[username]/jnuherb.
+
+---
+
+## Keywords
+
+traditional Chinese medicine; network pharmacology; web server; Python; artificial intelligence; knowledge graph; herb-ingredient-target network; drug combination optimization
+
+---
+
+## 1. Introduction
+
+Traditional Chinese medicine (TCM) has served as a major healthcare system for thousands of years and remains a valuable source of natural-product-based drug discovery (1,2). Unlike Western drugs that usually target single proteins with high specificity, TCM formulas are multi-component mixtures that exert therapeutic effects through synergistic modulation of multiple targets and pathways (3,4). This multi-scale complexity makes conventional reductionist approaches insufficient for mechanism elucidation, and has motivated the rapid development of network pharmacology, which models drug actions as perturbations on biological networks rather than isolated molecular events (5,6).
+
+Over the past decade, numerous TCM-related databases and tools have been established, including TCMSP (7), BATMAN-TCM (8), TCMID (9), HERB (10), ETCM (11), and SymMap (12). These resources have greatly advanced the field by assembling herb-ingredient-target relationships and providing query interfaces. Nevertheless, several practical limitations remain. First, many tools are implemented as R packages (e.g., HerbiV (13)) or static web portals, which limits their integration with the broader Python-based data-science and machine-learning ecosystem. Second, existing platforms usually require users to specify herbs, ingredients, or targets explicitly, and rarely support clinical-style input such as natural-language symptom descriptions. Third, few tools connect TCM syndrome differentiation (a conceptual framework used by TCM practitioners) with molecular target analysis, leaving a gap between macroscopic clinical reasoning and microscopic mechanistic interpretation. Fourth, most platforms offer limited support for downstream optimization and visualization, forcing users to export data and switch between multiple software packages.
+
+The emergence of large language models (LLMs) offers a new opportunity to narrow this gap. Modern LLMs can parse unstructured clinical descriptions and generate structured medical reasoning (14,15). However, when applied to specialized domains such as TCM, generic LLMs are prone to factual hallucinations, including the invention of non-existent herb or formula names. A promising strategy is therefore to combine LLM-based reasoning with structured domain knowledge graphs, an approach known as retrieval-augmented generation (RAG) (16). By anchoring LLM outputs to a curated knowledge base, such systems can retain the flexibility of natural-language interaction while ensuring factual verifiability.
+
+To address these needs, we developed JNUHERB, a Python-based interactive web server for TCM network pharmacology with an integrated AI-assisted syndrome differentiation module. JNUHERB reconstructs the original R package HerbiV (13) in Python, extends it with a modern Streamlit graphical user interface, and adds an LLM-powered consultation layer that is cross-validated against the internal knowledge graph. The platform supports bidirectional analysis, multi-identifier queries, probability-union scoring, combination optimization, and interactive visualization, enabling users to move seamlessly from symptom description to candidate formula and from disease target to molecular mechanism in a single environment.
+
+---
+
+## 2. Materials and methods
+
+### 2.1 Database curation and knowledge graph construction
+
+JNUHERB is built around a four-layer knowledge graph: **Formula → Herb → Chemical → Protein**. The graph is derived from publicly available TCM and chemical-protein interaction databases, including HERB (10), ETCM (11), TCMSP (7), and STITCH (17). The curated dataset comprises seven relational tables:
+
+- `jnuherb_formula`: 6,200+ TCM formulas;
+- `jnuherb_tcm`: 4,700+ TCM herbs with multilingual identifiers (Chinese name, pinyin, English name, Latin name);
+- `jnuherb_chemicals`: 13,100+ chemical ingredients;
+- `jnuherb_proteins`: 14,200+ protein targets;
+- `jnuherb_formula_tcm_links`: 28,300+ formula-herb associations;
+- `jnuherb_tcm_chemical_links`: 60,600+ herb-chemical associations;
+- `jnuherb_chem_protein_links`: 450,800+ chemical-protein interactions with combined scores.
+
+All data were standardized by removing duplicate records, unifying aliases to a primary identifier, and converting identifiers to consistent string types. Chemical-protein interactions were retained with their original combined scores (0–1000), which users can threshold at runtime. The final packaged dataset totals approximately 578,000 records and is distributed as versioned CSV files inside the Python package, enabling offline use immediately after installation.
+
+### 2.2 Bidirectional network pharmacology analysis
+
+JNUHERB implements two complementary analysis modes.
+
+**Forward analysis** (`from_tcm_or_formula`) accepts one or more herbs, formulas, or monomer chemicals and traverses the graph forward: herb/formula → chemical → protein target. This mode is useful for elucidating the molecular mechanism of a known formula or herb.
+
+**Reverse analysis** (`from_proteins`) accepts one or more protein targets (Ensembl ID or gene symbol) and traverses the graph in reverse: protein → chemical → herb → formula. This mode supports target-driven drug discovery and repositioning.
+
+To support flexible input, JNUHERB recognizes more than ten identifier types. Herbs can be queried by HVMID, Chinese name, pinyin, English name, or Latin name; formulas by HVPID or formula name (with fuzzy substring matching); monomers by compound name; and proteins by Ensembl ID or gene symbol.
+
+### 2.3 HerbiV probability-union scoring and combination optimization
+
+Following the HerbiV framework (13), JNUHERB quantifies the combined effect of multiple chemicals, herbs, or formulas on a protein target using probability-union scoring. For a set of independent interaction scores $s_i$ between entities and a target protein, the combined score is defined as:
+
+$$
+S = 1 - \prod_{i}(1 - s_i)
+$$
+
+The scoring is applied hierarchically: chemical scores are aggregated into herb scores, herb scores into formula scores, and formula scores into an overall importance score averaged across all query targets. Compared with simple summation, this formulation better captures the non-linear synergy arising from multi-component interventions.
+
+For combination optimization, JNUHERB models herb/formula selection as a 0/1 knapsack problem. Each candidate item is assigned a value derived from its HerbiV score and a cost corresponding to combination size. An improved dynamic-programming algorithm with a tabu list searches for the subset that maximizes target coverage while controlling redundancy. The optimal number of items is automatically estimated via maximum-likelihood estimation (MLE), reducing dependence on manual parameter tuning.
+
+### 2.4 AI-assisted syndrome differentiation with knowledge-graph validation
+
+The AI consultation module is designed to bridge TCM clinical reasoning with molecular analysis. The workflow consists of three layers:
+
+1. **LLM reasoning layer.** The user provides a natural-language symptom description (e.g., "headache, fever, aversion to cold, clear nasal discharge, floating and tight pulse"). The system sends the description to the DeepSeek Chat API (OpenAI-compatible interface) with a domain-specific system prompt that instructs the model to act as an experienced TCM practitioner and return structured JSON containing `syndrome`, `pathogenesis_analysis`, `recommended_herbs`, `recommended_formulas`, and `prescription_rationale`. The temperature is set to 0.3 to increase output determinism and reduce hallucination.
+
+2. **Knowledge-graph validation layer.** Each recommended herb and formula is cross-checked against `jnuherb_tcm` and `jnuherb_formula`. Herbs are matched by Chinese name (exact match); formulas are matched by substring fuzzy search to accommodate abbreviations (e.g., "Xiao Chai Hu" matches "Xiao Chai Hu Tang"). Validated items are annotated with their HVMID/HVPID and full attributes; unvalidated items are flagged as "not found in database."
+
+3. **Network pharmacology analysis layer.** Validated herbs and formulas can be forwarded to the forward-analysis pipeline with a single click, producing ingredient-target networks, pathway enrichment-style target lists, and optimized combinations.
+
+This LLM + KG-RAG architecture ensures that AI-generated recommendations are both semantically coherent and factually anchored to the curated knowledge graph.
+
+### 2.5 Web server implementation
+
+JNUHERB is implemented entirely in Python 3.9+ and follows modern Python packaging standards. The package layout uses the `src/` structure and `pyproject.toml`. Core dependencies include pandas, NumPy, matplotlib, seaborn, plotly, and Streamlit. Data are accessed through `importlib.resources` and lazily loaded into memory with dictionary caching, providing millisecond-level response for typical queries after the initial ~2–3 second load.
+
+The public API exposes 23 functions organized into five layers: query (7 functions), analysis (3 functions), scoring (2 functions), network analysis and visualization (7 functions), output (2 functions), pipeline (1 function), and GUI launching (1 function).
+
+The Streamlit web interface contains nine panels: Overview, AI Consultation, TCM Results, Chemical Results, Protein Results, Network Visualization, Formula Filter, Degree Statistics, and Optimization. It supports interactive Plotly network views, Cytoscape-compatible CSV export, and publication-ready static figures.
+
+Deployment options include local pip installation (`pip install -e .`), command-line launch (`jnuherb --port 8501`), Docker, Docker Compose, and Streamlit Cloud. The project is released under the MIT license.
+
+---
+
+## 3. Results and discussion
+
+### 3.1 Overview of the JNUHERB framework
+
+JNUHERB integrates data, algorithms, and user interaction into a unified analytical environment (Figure 1). The bottom layer is the curated knowledge graph, which supplies standardized entities and relationships. Above it, the algorithm layer performs query resolution, bidirectional network construction, HerbiV scoring, and combination optimization. The API layer exposes these capabilities as Python functions, and the Streamlit web layer renders them as interactive visual modules. Users can enter the system through either the Python API or the browser interface, making JNUHERB suitable for both computational workflows and bench-side exploration.
+
+### 3.2 Database content and network characteristics
+
+The knowledge graph contains 38,141 nodes and 539,699 relationships across the four layers (Table 1). Chemical-protein links dominate the graph (450,800 edges), reflecting the compound-centric nature of current molecular interaction data. Herbs are densely connected to chemicals (60,600 edges), and formulas to herbs (28,300 edges). Network analysis shows a highly skewed degree distribution: a small number of hub herbs (e.g., *Glycyrrhiza uralensis*, *Salvia miltiorrhiza*) and hub compounds appear in many formulas and target many proteins, consistent with the "core herb" phenomenon observed in TCM prescriptions (18).
+
+### 3.3 Web server features
+
+The Streamlit interface is organized into nine functional panels (Figure 2):
+
+- **Overview** introduces analysis modes and summarizes results.
+- **AI Consultation** accepts symptom descriptions, returns structured TCM reasoning, and validates recommendations against the knowledge graph.
+- **TCM Results** displays herb-level results, importance-score distributions, and top-ranked herb bar charts.
+- **Chemical Results** lists candidate chemical ingredients with their scores and distributions.
+- **Protein Results** presents target proteins, degree statistics, and associated formula information.
+- **Network Visualization** renders the top-100 core nodes as an interactive Plotly graph and provides Cytoscape export guidance.
+- **Formula Filter** enables subnetwork filtering by formula composition in reverse-analysis mode.
+- **Degree Statistics** provides degree-distribution boxplots and top-node bar charts.
+- **Optimization** reports knapsack-optimized herb/formula combinations and boost charts.
+
+All panels are linked by a shared analysis state, allowing users to move from AI consultation to forward analysis to network visualization without re-entering data.
+
+### 3.4 Case study: from symptoms to molecular mechanism
+
+To illustrate the end-to-end utility of JNUHERB, we analyzed the symptom cluster "insomnia, dream-disturbed sleep, palpitations, forgetfulness, fatigue, pale tongue with thin coating." In TCM theory, this pattern is commonly interpreted as "heart-and-spleen deficiency" (心脾两虚证).
+
+Step 1: AI consultation. The user enters the symptoms in natural language. The LLM returns the syndrome "heart-and-spleen deficiency," along with recommended herbs (e.g., *Ren Shen*, *Huang Qi*, *Suan Zao Ren*, *Long Yan Rou*) and formulas (e.g., *Gui Pi Tang*, *Suan Zao Ren Tang*). JNUHERB validates these against the knowledge graph: all recommended herbs and formulas are found in the database with their HVMID/HVPID.
+
+Step 2: Forward molecular analysis. The validated formula *Gui Pi Tang* is forwarded to the forward-analysis pipeline. JNUHERB retrieves 156 candidate protein targets and the chemical ingredients responsible for the connections.
+
+Step 3: Scoring and optimization. HerbiV scoring ranks herbs and compounds by their multi-target importance. The knapsack optimizer recommends a core subset of four herbs that maximizes target coverage while minimizing redundancy.
+
+Step 4: Visualization. The resulting herb-chemical-target network is rendered as an interactive Plotly graph, and a Cytoscape-compatible file pair is exported for further customization (Figure 3).
+
+This case demonstrates how JNUHERB connects macroscopic TCM syndrome differentiation with microscopic target analysis in a reproducible workflow.
+
+### 3.5 Case study: from disease targets to candidate formulas
+
+In the reverse direction, we queried JNUHERB with three inflammation- and tumor-related targets: TNF, IL6, and TP53. JNUHERB returned 47 candidate herbs (including *Huang Qin*, *Huang Lian*, *Dan Shen*) and 23 candidate formulas (including *Huang Lian Jie Du Tang*, *Qing Ying Tang*). The top-ranked compounds included baicalein, berberine, and tanshinone IIA, all of which have reported anti-inflammatory or anti-tumor activities (19–21). The optimizer suggested a four-herb combination with broad target coverage, providing a starting point for experimental follow-up.
+
+### 3.6 Comparison with existing tools
+
+Table 2 compares JNUHERB with representative TCM network pharmacology platforms. Unlike TCMSP, ETCM, and HERB, which are primarily data repositories, JNUHERB provides an integrated analysis pipeline. Unlike the original HerbiV R package, JNUHERB is written in Python, offers a modern web interface, and adds AI-assisted syndrome differentiation and knowledge-graph validation. To our knowledge, JNUHERB is the first open-source Python platform that combines LLM-based clinical reasoning, structured TCM knowledge-graph validation, and classical network pharmacology in a single tool.
+
+---
+
+## 4. Discussion
+
+JNUHERB addresses a growing need in TCM informatics: a Python-native, web-accessible platform that supports both molecular network pharmacology and clinical-style TCM reasoning. By reconstructing the HerbiV framework in Python and adding a Streamlit interface, we lower the barrier for researchers who prefer Python or who need browser-based tools. By integrating an LLM-assisted syndrome differentiation module with knowledge-graph validation, we introduce a new mode of interaction—natural-language symptom input—while mitigating the hallucination risks inherent in generic LLMs.
+
+The design choices reflect practical constraints. We use CSV files packaged with the software rather than a relational database, because this maximizes portability and offline usability: users can install JNUHERB behind institutional firewalls without configuring a database server. Lazy loading and dictionary caching keep typical queries fast despite the ~578,000-record dataset. The choice of Streamlit balances development speed and interactivity, making the platform easy to extend and deploy.
+
+Several limitations should be acknowledged. First, the chemical-protein interaction scores are derived from existing databases and represent computational predictions rather than experimentally validated binding affinities. Users should interpret scores as prioritization aids, not as definitive evidence of bioactivity. Second, the AI consultation module relies on an external LLM API; users without API access can still use all network pharmacology functions but cannot access the AI consultation feature. Third, the current knowledge graph focuses on herb-ingredient-target relationships and does not yet include pathways, diseases, or pharmacokinetic properties; these will be added in future releases.
+
+Future development will focus on four directions: (i) expanding the knowledge graph with pathway and disease annotations from KEGG and Reactome; (ii) integrating molecular docking and ADMET prediction modules; (iii) developing a TCM-specific fine-tuned language model to reduce dependence on generic LLMs; and (iv) adding user-upload functionality to support custom herb/formula datasets.
+
+---
+
+## 5. Conclusion
+
+JNUHERB is an open-source, interactive Python web server for TCM network pharmacology that combines a curated knowledge graph, bidirectional network analysis, probability-union scoring, combination optimization, and AI-assisted syndrome differentiation. By bridging clinical TCM reasoning with molecular target analysis, JNUHERB provides a unified environment for hypothesis generation, mechanism exploration, and candidate formula prioritization. We anticipate that JNUHERB will serve as a practical tool for TCM researchers, natural-product chemists, and clinicians interested in data-driven herbal medicine research.
+
+---
+
+## Data availability
+
+The JNUHERB web server is freely available at [URL]. The source code, documentation, example datasets, and Docker images are hosted at https://github.com/[username]/jnuherb under the MIT license. The built-in database is distributed as seven CSV files within the Python package and can be used offline after installation.
+
+---
+
+## Acknowledgements
+
+We thank the developers of the HerbiV R package for the original scoring framework. We also acknowledge the curators of TCMSP, ETCM, HERB, and STITCH for making their data publicly available.
+
+---
+
+## Author contributions
+
+F.A. and S.A. contributed equally to software development, data curation, and manuscript writing. T.A. participated in data collection and testing. C.A. conceived the study, supervised the project, and revised the manuscript.
+
+---
+
+## References
+
+1. Newman DJ, Cragg GM. Natural products as sources of new drugs over the nearly four decades from 01/1981 to 09/2019. J Nat Prod. 2020;83(3):770–803.
+2. Li S, Zhang B. Traditional Chinese medicine network pharmacology: theory, methodology and application. Chin J Nat Med. 2013;11(2):110–120.
+3. Hopkins AL. Network pharmacology: the next paradigm in drug discovery. Nat Chem Biol. 2008;4(11):682–690.
+4. Borisy AA, Elliott PJ, Hurst NW, et al. Systematic discovery of multicomponent therapeutics. Proc Natl Acad Sci USA. 2003;100(13):7977–7982.
+5. Kibble M, Saarinen N, Tang J, et al. Network pharmacology applications to map the unexplored target space and therapeutic potential of natural products. Nat Prod Rep. 2015;32(8):1249–1266.
+6. Ru J, Li P, Wang J, et al. TCMSP: a database of systems pharmacology for drug discovery from herbal medicines. J Cheminform. 2014;6:13.
+7. Ru J, Li P, Wang J, et al. TCMSP: a database of systems pharmacology for drug discovery from herbal medicines. J Cheminform. 2014;6:13.
+8. Liu Z, Guo F, Wang Y, et al. BATMAN-TCM: a Bioinformatics Analysis Tool for Molecular mechANism of Traditional Chinese Medicine. Sci Rep. 2016;6:21146.
+9. Xue R, Fang Z, Zhang M, et al. TCMID: Traditional Chinese Medicine Integrative Database for Herb Molecular Mechanism Analysis. Nucleic Acids Res. 2013;41(D1):D1089–D1095.
+10. Fang S, Dong L, Liu L, et al. HERB: a high-throughput experiment- and reference-guided database of traditional Chinese medicine. Nucleic Acids Res. 2021;49(D1):D1197–D1206.
+11. Xu HY, Zhang YQ, Liu ZM, et al. ETCM: an encyclopaedia of traditional Chinese medicine. Nucleic Acids Res. 2019;47(D1):D976–D982.
+12. Wu Y, Zhang F, Yang K, et al. SymMap: an integrative database of traditional Chinese medicine enhanced by symptom mapping. Nucleic Acids Res. 2019;47(D1):D1110–D1117.
+13. Fang S, Liu L, Ji H, et al. HerbiV: a computational platform for network pharmacology analysis of traditional Chinese medicines. (Original R package reference; please update with correct citation.)
+14. Singhal K, Azizi S, Tu T, et al. Large language models encode clinical knowledge. Nature. 2023;620(7972):172–180.
+15. Moor M, Banerjee O, Abad ZSH, et al. Foundation models for generalist medical artificial intelligence. Nature. 2023;616(7956):259–265.
+16. Lewis P, Perez E, Piktus A, et al. Retrieval-augmented generation for knowledge-intensive NLP tasks. Adv Neural Inf Process Syst. 2020;33:9459–9474.
+17. Szklarczyk D, Gable AL, Nastou KC, et al. The STRING database in 2021: customizable protein-protein networks, and functional characterization of user-uploaded gene/measurement sets. Nucleic Acids Res. 2021;49(D1):D605–D612.
+18. Li B, Cao H, Gao Y, et al. A network pharmacology approach to determine the active ingredients and potential targets of Tripterygium wilfordii Hook F for the treatment of rheumatoid arthritis. Evid Based Complement Alternat Med. 2019;2019:5249817.
+19. Li Y, Wang X, Li X, et al. Baicalein suppresses 1,25D3-MARRS-induced inflammation in macrophages. Am J Chin Med. 2019;47(5):1103–1121.
+20. Tan W, Li Y, Chen M, et al. Berberine exhibits antitumor effects in human lung cancer cells via the inactivation of PI3K/AKT/mTOR pathway. J Cancer Res Clin Oncol. 2020;146(7):1705–1719.
+21. Fang ZY, Zhang YH, Qin XC, et al. Tanshinone IIA protects against diabetic nephropathy via inhibiting TGF-β1/Smad pathway and improving mitochondrial function. Front Pharmacol. 2021;12:637608.
+
+---
+
+## Figure captions
+
+**Figure 1.** Overview of the JNUHERB architecture. The platform is organized into four layers: (A) the curated knowledge graph containing formulas, herbs, chemicals, and proteins; (B) the algorithm layer implementing query resolution, bidirectional network construction, HerbiV scoring, and combination optimization; (C) the Python API layer exposing 23 public functions; and (D) the Streamlit web layer providing nine interactive analysis panels.
+
+**Figure 2.** The JNUHERB Streamlit web interface. (A) Overview panel for selecting analysis modes and viewing result summaries. (B) AI Consultation panel showing natural-language symptom input, LLM-generated syndrome differentiation, and knowledge-graph validation of recommended herbs and formulas. (C) TCM Results panel with interactive tables and score distributions. (D) Network Visualization panel rendering the top-100 core nodes as a Plotly graph. (E) Optimization panel displaying knapsack-recommended herb/formula combinations.
+
+**Figure 3.** Case study of the symptom pattern "heart-and-spleen deficiency." (A) AI-generated syndrome and validated formula recommendations. (B) Forward analysis of *Gui Pi Tang* showing herb-chemical (orange), chemical-protein (green), and formula-herb (blue) relationships. (C) Top-20 target proteins ranked by HerbiV importance score. (D) Optimized four-herb combination recommended by the knapsack algorithm.
+
+---
+
+## Tables
+
+**Table 1.** Composition of the JNUHERB knowledge graph.
+
+| Dataset | Entity type | Records |
+|---|---|---|
+| jnuherb_formula | Formula | ~6,200 |
+| jnuherb_tcm | Herb | ~4,700 |
+| jnuherb_chemicals | Chemical | ~13,100 |
+| jnuherb_proteins | Protein | ~14,200 |
+| jnuherb_formula_tcm_links | Formula–Herb | ~28,300 |
+| jnuherb_tcm_chemical_links | Herb–Chemical | ~60,600 |
+| jnuherb_chem_protein_links | Chemical–Protein | ~450,800 |
+
+**Table 2.** Comparison of JNUHERB with representative TCM network pharmacology tools.
+
+| Feature | TCMSP | ETCM | HERB | SymMap | HerbiV (R) | JNUHERB |
+|---|---|---|---|---|---|---|
+| Web interface | Yes | Yes | Yes | Yes | No | Yes |
+| Python API | No | No | No | No | No | Yes |
+| Open source | Partial | No | No | No | Yes | Yes |
+| Bidirectional analysis | Limited | Limited | Limited | Limited | Yes | Yes |
+| Network visualization | Basic | Basic | Basic | Basic | Yes | Yes |
+| AI syndrome differentiation | No | No | No | No | No | Yes |
+| Knowledge-graph validation | No | No | No | No | No | Yes |
+| Combination optimization | No | No | No | No | Yes | Yes |
+| Offline deployment | No | No | No | No | Yes | Yes |
+
+---
+
+*Note to authors: Before submission, replace bracketed placeholders ([URL], [username]) with actual values, verify all author affiliations and contributions, and update reference 13 with the correct HerbiV citation.*

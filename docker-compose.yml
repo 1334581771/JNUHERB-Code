@@ -1,0 +1,34 @@
+# =============================================================================
+# JNUHERB — Docker Compose deployment
+# =============================================================================
+# Start:
+#   docker compose up -d
+#
+# Stop:
+#   docker compose down
+#
+# View logs:
+#   docker compose logs -f
+# =============================================================================
+
+version: "3.8"
+
+services:
+  jnuherb:
+    build: .
+    image: jnuherb:latest
+    container_name: jnuherb
+    ports:
+      - "${JNUHERB_PORT:-8501}:8501"
+    environment:
+      - JNUHERB_HOST=0.0.0.0
+      - JNUHERB_PORT=8501
+    restart: unless-stopped
+    # Mount results directory to persist analysis outputs
+    volumes:
+      - jnuherb_results:/home/jnuherb/results
+      # Optional: mount custom config
+      # - ./.streamlit/config.toml:/home/jnuherb/.streamlit/config.toml:ro
+
+volumes:
+  jnuherb_results:
