@@ -212,7 +212,9 @@ server {
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_read_timeout 86400;
+        proxy_read_timeout 420s;
+        proxy_connect_timeout 420s;
+        proxy_send_timeout 420s;
     }
 }
 ```
@@ -571,6 +573,100 @@ sudo docker compose restart
 | 重启 nginx | `sudo systemctl restart nginx` |
 | 查看 nginx 配置 | `sudo nginx -t` |
 | 查看系统防火墙 | `sudo ufw status` |
+
+---
+
+## 小服务器部署注意事项（2C4G 及以下）
+
+如果你使用的是 2 核 4G 的轻量云主机，建议采取以下措施防止单个分析任务拖垮整个服务。
+默认配置已允许最多 **2 个分析任务同时运行**，请根据实际并发量调整资源限制。
+
+### 1. Docker 资源限制
+
+`docker-compose.yml` 中已经配置了资源限制：
+
+```yaml
+deploy:
+  resources:
+    limits:
+      cpus: '1.5'
+      memory: 3G
+    reservations:
+      cpus: '0.5'
+      memory: 1G
+```
+
+这确保 JNUHERB 容器最多使用 1.5 核 CPU 和 3G 内存，不会占满整个服务器。
+**注意**：当 5 个分析任务同时运行时，1.5 核 / 3G 资源可能不足，建议升级到 4 核 8G
+以上，或在 `docker-compose.yml` 中调高 `cpus` 和 `memory`。
+
+### 2. 分析任务并发锁
+
+JNUHERB 已内置文件锁机制：同一时刻最多允许 **2 个分析任务同时运行**。
+如果服务器当前已有 2 个分析任务在运行，新用户点击 **Run Analysis** 会看到：
+
+> "Server is busy with 2 analyses. Please wait a moment and try again."
+
+如需修改并发数，请编辑 `src/jnuherb/data/streamlit_app.py` 中的常量：
+
+```python
+ANALYSIS_MAX_CONCURRENT = 2
+```
+
+改大该值后，务必同步增加服务器的 CPU / 内存配额，并调整 `docker-compose.yml`
+中的资源限制，否则容易出现超时或 OOM。
+
+### 3. 超时保护
+
+单次分析最多运行 360 秒，超过后会自动停止并提示用户减少输入规模或调低 score threshold。这样即使用户关闭浏览器，服务器也不会被无限占用。
+
+### 4. 输入规模限制
+
+- Reverse 模式：最多 30 个目标蛋白
+- Forward 模式：最多 30 个草药/方剂/单体
+- Formula 名称模糊匹配：解析后最多 30 个方剂
+- Forward 蛋白过滤：最多 50 个蛋白
+
+### 5. nginx 超时设置
+
+nginx 代理超时已设置为 300 秒，避免长连接一直挂起：
+
+```nginx
+proxy_read_timeout 300s;
+proxy_connect_timeout 300s;
+proxy_send_timeout 300s;
+```
+
+### 6. 应急处理
+
+如果网页完全卡死、无法进入，登录服务器强制重启：
+
+```bash
+ssh root@111.228.21.145
+cd /opt/jnuherb
+sudo docker compose down
+sudo docker compose up -d
+```
+
+如果怀疑有僵尸进程，可以：
+
+```bash
+sudo docker stats jnuherb          # 查看容器资源占用
+sudo docker compose logs -f        # 查看实时日志
+```
+
+### 7. 分子对接（Docking）功能注意事项
+
+网站的「🧪 Docking」栏目使用 AutoDock Vina 做单分子对接（exhaustiveness 8），
+Docker 镜像已内置全部依赖（rdkit / meeko / vina，vina 在构建阶段编译）。
+
+- **单次对接耗时**：2 核服务器上约 1–5 分钟，受体越大越慢
+- **蛋白结构来源**：自动模式从 AlphaFold DB 在线下载（首次每个蛋白约几秒），
+  下载结果在容器生命周期内缓存；容器重建后需重新下载
+- **Ensembl → UniProt 映射**：打包在镜像内（`ensembl_uniprot.csv`），
+  如数据库蛋白表更新，需重新运行 `scripts/build_uniprot_mapping.py` 并重建镜像
+- **并发建议**：对接期间容器 CPU 占用较高，2C4G 服务器建议同时只进行
+  1 个对接任务（用户连续点击会被 Streamlit 排队，一般不会冲突）
 
 ---
 

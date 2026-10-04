@@ -11,8 +11,10 @@ Usage::
     from jnuherb.chat import consult
 
     result = consult("头痛发热，恶寒无汗，脉浮紧", api_key="sk-...")
-    print(result["syndrome"])
-    print(result["herbs"])
+    print(result["syndrome"]["zh"])
+    print(result["syndrome"]["en"])
+    print(result["herbs"]["zh"])
+    print(result["herbs"]["en"])
 """
 
 from __future__ import annotations
@@ -22,6 +24,8 @@ import os
 import re
 from typing import Any, Optional
 
+import numpy as np
+import pandas as pd
 import requests
 
 # ---------------------------------------------------------------------------
@@ -31,26 +35,340 @@ DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions"
 DEEPSEEK_MODEL = "deepseek-chat"
 
 # ---------------------------------------------------------------------------
-# System prompt for TCM syndrome differentiation
+# Bilingual symptom keyword expansion (Chinese → English synonyms)
 # ---------------------------------------------------------------------------
-SYSTEM_PROMPT = """你是一位经验丰富的中医专家。用户会描述疾病症状，请你进行中医辨证分析并给出用药建议。
-
-请严格按以下 JSON 格式回复（不要包含其他文字）：
-{
-  "syndrome": "中医证型名称",
-  "analysis": "简要的病机分析（100字以内）",
-  "herbs": ["草药中文名1", "草药中文名2", "草药中文名3", ...],
-  "formulas": ["方剂名1", "方剂名2", ...],
-  "explanation": "用药思路说明（150字以内）"
+_SYMPTOM_TRANSLATIONS = {
+    "头痛": ["headache"],
+    "头疼": ["headache"],
+    "发热": ["fever"],
+    "发烧": ["fever"],
+    "恶寒": ["aversion to cold", "chilly", "chill"],
+    "畏寒": ["aversion to cold", "chilly", "chill"],
+    "无汗": ["no sweating", "anhidrosis", "without sweating"],
+    "汗出": ["sweating", "perspiration"],
+    "出汗": ["sweating", "perspiration"],
+    "脉浮": ["floating pulse"],
+    "脉紧": ["tight pulse"],
+    "咳嗽": ["cough"],
+    "咳": ["cough"],
+    "咽痛": ["sore throat", "throat pain"],
+    "咽喉痛": ["sore throat", "throat pain"],
+    "鼻塞": ["nasal congestion", "stuffy nose"],
+    "流涕": ["nasal discharge", "runny nose"],
+    "失眠": ["insomnia"],
+    "多梦": ["dream-disturbed sleep", "dream disturbed"],
+    "心悸": ["palpitations"],
+    "心慌": ["palpitations"],
+    "健忘": ["forgetfulness"],
+    "乏力": ["fatigue", "lassitude"],
+    "疲倦": ["fatigue", "lassitude"],
+    "舌淡": ["pale tongue"],
+    "苔薄": ["thin coating"],
+    "胃脘痛": ["epigastric pain", "stomachache"],
+    "胃痛": ["epigastric pain", "stomachache"],
+    "嗳气": ["belching", "eructation"],
+    "食欲不振": ["poor appetite", "anorexia", "loss of appetite"],
+    "纳差": ["poor appetite", "anorexia"],
+    "大便不畅": ["constipation"],
+    "便秘": ["constipation"],
+    "腹泻": ["diarrhea"],
+    "泄泻": ["diarrhea"],
+    "呕吐": ["vomiting"],
+    "恶心": ["nausea"],
+    "腹胀": ["abdominal distension", "bloating"],
+    "腹痛": ["abdominal pain"],
+    "黄疸": ["jaundice"],
+    "水肿": ["edema"],
+    "眩晕": ["dizziness"],
+    "头晕": ["dizziness"],
+    "口干": ["dry mouth"],
+    "口渴": ["thirst"],
+    "口苦": ["bitter taste"],
+    "烦躁": ["irritability", "restlessness"],
+    "胸闷": ["chest oppression", "chest stuffiness"],
+    "胸痛": ["chest pain"],
+    "气短": ["shortness of breath"],
+    "气喘": ["asthma", "dyspnea"],
+    "腰痛": ["low back pain", "lumbar pain"],
+    "关节痛": ["joint pain", "arthralgia"],
+    "痛经": ["dysmenorrhea"],
+    "月经不调": ["irregular menstruation"],
+    "白带": ["leukorrhea"],
+    "遗精": ["seminal emission"],
+    "阳痿": ["impotence"],
+    "尿频": ["frequent urination"],
+    "尿急": ["urgent urination"],
+    "尿痛": ["painful urination"],
+    "皮疹": ["rash"],
+    "瘙痒": ["itching", "pruritus"],
+    "发热恶寒": ["fever and aversion to cold"],
+    "寒热往来": ["alternating chills and fever"],
+    "脉浮紧": ["floating and tight pulse"],
+    "脉浮数": ["floating and rapid pulse"],
+    "脉细数": ["thin and rapid pulse"],
+    "舌淡苔白": ["pale tongue with white coating"],
+    "舌红苔黄": ["red tongue with yellow coating"],
+    "恶寒发热": ["aversion to cold and fever"],
+    "头痛无汗": ["headache without sweating"],
+    "鼻塞流涕": ["nasal congestion and discharge"],
+    "心悸失眠": ["palpitations and insomnia"],
+    "神疲乏力": ["fatigue and lassitude"],
+    # TCM pattern / syndrome names
+    "少阳证": ["Shaoyang syndrome"],
+    "肾阴虚": ["kidney yin deficiency"],
+    "肾阳虚": ["kidney yang deficiency"],
+    "肝郁": ["liver qi stagnation"],
+    "脾虚": ["spleen qi deficiency"],
+    "脾胃虚寒": ["spleen stomach deficiency cold"],
+    "血虚": ["blood deficiency"],
+    "血瘀": ["blood stasis"],
+    "湿热": ["damp-heat"],
+    "风寒湿痹": ["wind cold damp bi syndrome"],
+    # Pulse signs
+    "脉弦": ["wiry pulse"],
+    "脉细": ["thin pulse"],
+    "脉数": ["rapid pulse"],
+    "脉沉": ["deep pulse"],
+    "脉弱": ["weak pulse"],
+    "脉细数": ["thin and rapid pulse"],
+    "脉沉细": ["deep and thin pulse"],
+    "脉滑数": ["slippery and rapid pulse"],
+    "脉涩": ["choppy pulse"],
+    "脉弦涩": ["wiry and choppy pulse"],
+    "脉沉迟": ["deep and slow pulse"],
+    "脉濡弱": ["soft and weak pulse"],
+    "脉弦滑": ["wiry and slippery pulse"],
+    # Tongue signs
+    "舌红": ["red tongue"],
+    "舌淡": ["pale tongue"],
+    "舌质红": ["red tongue body"],
+    "舌质淡": ["pale tongue body"],
+    "舌质暗红": ["dark red tongue body"],
+    "舌质紫暗": ["dark purple tongue body"],
+    "舌淡胖": ["pale swollen tongue"],
+    "舌体胖大": ["swollen tongue body"],
+    "齿痕": ["teeth marks"],
+    "苔薄白": ["thin white coating"],
+    "苔黄": ["yellow coating"],
+    "苔白": ["white coating"],
+    "苔少": ["scanty coating"],
+    "少苔": ["scanty coating"],
+    "无苔": ["no coating"],
+    "苔黄腻": ["yellow greasy coating"],
+    "苔白滑": ["white slippery coating"],
+    "舌下络脉": ["sublingual veins"],
+    # Classic formula key symptoms
+    "往来寒热": ["alternating chills and fever"],
+    "胸胁苦满": ["chest and hypochondrium fullness"],
+    "默默不欲饮食": ["silent anorexia"],
+    "心烦喜呕": ["restlessness and nausea"],
+    "口苦": ["bitter taste"],
+    "咽干": ["dry throat"],
+    "目眩": ["dizziness"],
+    "腰膝酸软": ["weakness and soreness of waist and knees"],
+    "头晕耳鸣": ["dizziness and tinnitus"],
+    "盗汗": ["night sweats"],
+    "骨蒸潮热": ["bone-steaming tidal fever"],
+    "手足心热": ["heat in palms and soles"],
+    "畏寒": ["aversion to cold"],
+    "腰膝酸冷": ["cold and sore waist and knees"],
+    "阳痿": ["impotence"],
+    "遗精": ["seminal emission"],
+    "小便清长": ["clear long urination"],
+    "夜尿频多": ["nocturia"],
+    "五更泄泻": ["dawn diarrhea"],
+    "大便溏薄": ["loose stools"],
+    "便溏": ["loose stools"],
+    "面色萎黄": ["sallow complexion"],
+    "面色晦暗": ["dark complexion"],
+    "唇甲色淡": ["pale lips and nails"],
+    "头晕眼花": ["dizziness and blurred vision"],
+    "手足发麻": ["numbness of hands and feet"],
+    "小腹隐痛": ["dull lower abdominal pain"],
+    "月经量少": ["scanty menstruation"],
+    "经血紫暗": ["dark purple menstrual blood"],
+    "痛经": ["dysmenorrhea"],
+    "肌肤甲错": ["rough dry skin"],
+    "关节红肿": ["red swollen joints"],
+    "关节灼热": ["burning joints"],
+    "肢节烦痛": ["vexing pain in limbs and joints"],
+    "肩背沉重": ["heaviness in shoulder and back"],
+    "遍身酸痛": ["generalized soreness"],
+    "小便黄赤": ["dark yellow urine"],
+    "大便粘滞": ["sticky stools"],
+    "腹中挛急疼痛": ["spasmodic abdominal pain"],
+    "小腿转筋": ["calf cramps"],
+    "抽筋": ["muscle cramps"],
+    "三叉神经痛": ["trigeminal neuralgia"],
+    "坐骨神经痛": ["sciatica"],
+    "食少": ["poor appetite"],
+    "腹胀": ["abdominal distension"],
+    "肠鸣": ["borborygmus"],
+    "气短懒言": ["shortness of breath and reluctance to speak"],
+    "腹部喜温喜按": ["abdominal pain relieved by warmth and pressure"],
+    "腹痛绵绵": ["dull persistent abdominal pain"],
+    "呕吐清水": ["vomiting clear fluid"],
+    "下利清谷": ["diarrhea with undigested food"],
+    "吐涎沫": ["drooling frothy saliva"],
+    "高热": ["high fever"],
+    "神昏": ["loss of consciousness"],
+    "谵语": ["delirium"],
+    "面红目赤": ["red face and eyes"],
+    "牙关紧闭": ["clenched jaw"],
+    "惊厥抽搐": ["convulsions and seizures"],
+    "喉间痰鸣": ["phlegm rattle in throat"],
+    "口渴引饮": ["extreme thirst"],
+    "麻木不仁": ["numbness"],
+    "屈伸不利": ["limited flexion and extension"],
+    "刺痛": ["sharp pain"],
+    "痛有定处": ["fixed location pain"],
+    "拒按": ["tender to palpation"],
 }
 
-要求：
-1. syndrome: 必须是标准的中医证型名（如：风寒束表证、肝郁气滞证等）
-2. herbs: 列出 5-10 味最相关的草药（使用中文正名，如柴胡、黄芩等）
-3. formulas: 列出 2-5 个经典方剂（使用标准方剂名，如小柴胡汤、麻黄汤等）
-4. herbs 和 formulas 中的名称必须是标准名称，以便在中药数据库中检索
+# ---------------------------------------------------------------------------
+# System prompt for TCM syndrome differentiation
+# ---------------------------------------------------------------------------
+SYSTEM_PROMPT_TEMPLATE = """你是一位经验丰富的中医专家，同时具备用英文向国际读者解释中医概念的能力。用户会描述疾病症状，请你进行中医辨证分析并给出用药建议。
 
-请根据用户描述的症状进行辨证分析。"""
+**重要约束：你只能从下方“数据库候选”列表中选择草药和方剂进行推荐。** 治疗思路（explanation）必须围绕你实际推荐的、来自候选列表的草药/方剂展开，不能引入列表外未经验证的药物。如果候选列表为空，请在 explanation 中说明当前数据库未检索到直接匹配的症状记录，不要编造药物。
+
+请严格按以下 JSON 格式回复（不要包含其他文字）。所有文本字段必须同时提供中文（zh）和英文（en）：
+{
+  "syndrome": {
+    "zh": "中医证型名称",
+    "en": "English translation of the TCM syndrome (e.g., Wind-Cold Exterior Syndrome)"
+  },
+  "analysis": {
+    "zh": "简要的病机分析（100字以内）",
+    "en": "Brief pathogenesis analysis in English (within 150 words)"
+  },
+  "herbs": {
+    "zh": ["草药中文名1", "草药中文名2", "草药中文名3", ...],
+    "en": ["English herb name 1", "English herb name 2", "English herb name 3", ...]
+  },
+  "formulas": {
+    "zh": ["方剂名1", "方剂名2", ...],
+    "en": ["English formula name 1 (pinyin/translation)", "English formula name 2", ...]
+  },
+  "explanation": {
+    "zh": "按以下结构输出中医辨证论治完整回答（严格基于上述候选草药/方剂，不得引入候选列表外的药物）：\n\n【症状采集】\n  - 主诉：[用户主要症状概括]\n  - 补充四诊信息（如有）：[舌象/脉象/问诊要点]\n\n【八纲定性】\n  - 表/里：...\n  - 寒/热：...\n  - 虚/实：...\n  - 阴/阳总属：...\n\n【脏腑/气血定位】\n  - 病变脏腑：...\n  - 气血津液状态：...\n\n【证型判断】\n  - 主证：[标准证型名]\n  - 兼证（如有）：...\n\n【病机分析】\n  - 病因：...\n  - 病机（核心机制）：...\n\n【治则治法】\n  - 治疗原则：...\n  - 治法（八法）：...\n\n【方药参考】\n  - 代表方剂：[从候选列表中选取，2-5个]\n  - 方义简析（君臣佐使）：...\n  - 加减建议：...\n\n【预防调摄】\n  - 生活建议：...\n  - 饮食宜忌：...",
+    "en": "Provide a complete TCM syndrome differentiation and treatment response in English, organized by the same sections: Symptom Collection, Eight-Principles Analysis, Zang-Fu/Qi-Blood Localization, Syndrome Pattern, Pathogenesis, Treatment Principle, Formula Reference (only from candidate list), and Prevention/Lifestyle. Keep each section concise and grounded in the candidate herbs/formulas."
+  }
+}
+
+辨证步骤（必须遵循）：
+1. 先判断八纲：阴阳、表里、寒热、虚实。
+2. 再归纳四诊：望诊（舌象、面色）、闻诊（气味、声音）、问诊（症状、病史）、切诊（脉象）。
+3. 根据辨证结果，从候选方剂中选择最匹配的经典方剂。
+4. 如果候选列表中没有匹配方剂，请明确说明，不要编造。
+
+要求：
+1. syndrome.zh: 必须是标准的中医证型名（如：风寒束表证、肝郁气滞证等）。
+2. syndrome.en: 使用国际读者能理解的英文证型名（可保留拼音并加括号解释）。
+3. herbs.zh: 列出 5-10 味最相关的草药（必须从候选列表中选取，使用中文正名）。
+4. herbs.en: 对应草药的常用英文名或拉丁名。
+5. formulas.zh: 列出 2-5 个经典方剂（必须从候选列表中选取，使用标准方剂名）。
+6. formulas.en: 对应方剂的英文翻译或拼音（如 Xiao Chai Hu Tang）。
+7. 英文翻译应准确、专业，便于 SCI 论文读者理解。
+8. explanation.zh 必须按上述【症状采集】→【预防调摄】的章节结构输出，并引用你实际推荐的具体草药和方剂名称，说明它们如何针对用户症状协同作用，避免泛泛而谈。"""
+
+
+# ---------------------------------------------------------------------------
+# Classic formula syndrome-differentiation profiles
+# ---------------------------------------------------------------------------
+_PROFILES_CACHE: Optional[dict[str, Any]] = None
+
+
+def _load_syndrome_profiles() -> dict[str, Any]:
+    """Load the bundled classic-formula syndrome-differentiation profiles.
+
+    Returns a dict mapping Chinese formula name to its profile dict.
+    """
+    global _PROFILES_CACHE
+    if _PROFILES_CACHE is not None:
+        return _PROFILES_CACHE
+
+    try:
+        from importlib.resources import files
+
+        path = files("jnuherb.data").joinpath("formula_syndrome_profiles.json")
+        with open(str(path), "r", encoding="utf-8") as f:
+            profiles = json.load(f)
+    except Exception:
+        profiles = []
+
+    _PROFILES_CACHE = {p["name_zh"]: p for p in profiles}
+    return _PROFILES_CACHE
+
+
+def _build_profile_context(candidates: dict[str, Any], profiles: dict[str, Any]) -> str:
+    """Build in-context formula profiles for candidates that have them."""
+    formula_names = {f.get("name", "") for f in candidates.get("formulas", [])}
+    lines = ["=== 经典方剂辨证档案 / Classic formula syndrome profiles ==="]
+    found = False
+    for name in formula_names:
+        profile = profiles.get(name)
+        if not profile:
+            continue
+        found = True
+        bg = profile.get("ba_gang", {})
+        sz = profile.get("si_zhen", {})
+        key_syms = profile.get("key_symptoms", [])[:8]
+        contras = profile.get("contraindications", [])[:4]
+        lines.append(
+            f"【{name}】对应证型：{profile.get('syndrome_pattern_zh', '')} / "
+            f"{profile.get('syndrome_pattern_en', '')}"
+        )
+        lines.append(
+            f"  八纲：阴阳={bg.get('yin_yang','')}, 表里={bg.get('interior_exterior','')}, "
+            f"寒热={bg.get('cold_heat','')}, 虚实={bg.get('deficiency_excess','')}"
+        )
+        lines.append(f"  望诊：{sz.get('wang','')}")
+        lines.append(f"  闻诊：{sz.get('wen','')}")
+        lines.append(f"  问诊：{sz.get('wen_zhen','')}")
+        lines.append(f"  切诊：{sz.get('qie','')}")
+        lines.append(f"  关键症状：{', '.join(key_syms)}")
+        lines.append(f"  禁忌：{', '.join(contras)}")
+    if not found:
+        lines.append("（当前候选方剂暂无辨证档案）")
+    return "\n".join(lines)
+
+
+def _build_few_shot_examples() -> str:
+    """Return static few-shot examples for syndrome-formula reasoning."""
+    return """=== 辨证示例 / Syndrome differentiation examples ===
+
+示例1：
+症状：往来寒热，胸胁苦满，默默不欲饮食，心烦喜呕，口苦咽干，舌苔薄白，脉弦。
+八纲：阳证，半表半里，热证（寒热往来偏热），虚实夹杂。
+四诊：望诊见舌质偏红、苔薄白；闻诊见默默不欲饮食；问诊见口苦咽干、目眩、胸胁苦满、心烦喜呕；切诊脉弦。
+辨证：少阳证。
+推荐方剂：小柴胡汤。
+
+示例2：
+症状：腰膝酸软，头晕耳鸣，盗汗遗精，舌红少苔，脉细数。
+八纲：阴证，里证，虚证，热证（虚火上炎）。
+四诊：望诊见颧红、舌红少苔；问诊见腰膝酸软、头晕耳鸣、盗汗遗精、骨蒸潮热、手足心热；切诊脉沉细数。
+辨证：肾阴虚证。
+推荐方剂：六味地黄丸。
+
+示例3：
+症状：食少便溏，神疲乏力，气短懒言，面色萎白，舌淡苔白，脉细弱。
+八纲：阴证，里证，虚证，无明显寒热偏性（偏温）。
+四诊：望诊见面色萎白、舌淡嫩有齿痕；闻诊见气短懒言；问诊见食少便溏、神疲乏力、腹胀肠鸣；切诊脉细弱。
+辨证：脾胃气虚证。
+推荐方剂：四君子汤。"""
+
+
+def build_system_prompt(candidates: dict[str, Any]) -> str:
+    """Assemble the full system prompt with profiles and few-shot examples."""
+    profiles = _load_syndrome_profiles()
+    parts = [
+        SYSTEM_PROMPT_TEMPLATE,
+        _build_profile_context(candidates, profiles),
+        _build_few_shot_examples(),
+    ]
+    return "\n\n".join(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -63,8 +381,15 @@ def consult(
     api_key: Optional[str] = None,
     model: str = DEEPSEEK_MODEL,
     extra_context: str = "",
+    top_k_herbs: int = 15,
+    top_k_formulas: int = 10,
 ) -> dict[str, Any]:
     """Consult the DeepSeek AI for TCM syndrome analysis and recommendations.
+
+    Recommendations are grounded in the jnuherb database: before calling the
+    LLM, the function retrieves candidate herbs and formulas whose symptom/
+    function fields overlap with the user's description, and the model is
+    instructed to recommend only from these candidates.
 
     Args:
         symptoms: Patient symptom description (Chinese or English).
@@ -72,10 +397,15 @@ def consult(
             ``DEEPSEEK_API_KEY``.
         model: DeepSeek model name.
         extra_context: Optional additional context (e.g. lab results).
+        top_k_herbs: Number of herb candidates to retrieve from the database.
+        top_k_formulas: Number of formula candidates to retrieve from the database.
 
     Returns:
-        Dict with keys ``syndrome``, ``analysis``, ``herbs``,
-        ``formulas``, ``explanation``, ``raw_response``.
+        Dict with bilingual keys ``syndrome``, ``analysis``, ``herbs``,
+        ``formulas``, ``explanation``. Each is either a dict with ``zh``
+        and ``en`` strings (for text fields) or a dict with ``zh`` and
+        ``en`` lists (for herbs/formulas). Also includes ``raw_response``
+        and ``candidates``.
 
     Raises:
         ValueError: If no API key is available.
@@ -83,16 +413,398 @@ def consult(
     """
     api_key = _resolve_api_key(api_key)
 
-    user_message = symptoms
+    # Retrieve database candidates grounded in the user's symptoms
+    candidates = retrieve_candidates(
+        symptoms,
+        top_k_herbs=top_k_herbs,
+        top_k_formulas=top_k_formulas,
+    )
+    rag_context = _build_rag_context(candidates)
+
+    user_message = f"用户症状描述：{symptoms}\n\n{rag_context}"
     if extra_context:
-        user_message = f"{symptoms}\n\n补充信息：{extra_context}"
+        user_message += f"\n\n补充信息：{extra_context}"
 
-    response = _call_deepseek(api_key, model, SYSTEM_PROMPT, user_message)
+    response = _call_deepseek(api_key, model, build_system_prompt(candidates), user_message)
 
-    # Parse JSON from response
+    # Parse JSON from response and normalize to bilingual format
     parsed = _parse_response(response)
+    parsed = _normalize_bilingual(parsed)
+    parsed = validate_recommendation(parsed, candidates)
 
     parsed["raw_response"] = response
+    parsed["candidates"] = candidates
+    return parsed
+
+
+def retrieve_candidates(
+    symptoms: str,
+    top_k_herbs: int = 15,
+    top_k_formulas: int = 10,
+) -> dict[str, Any]:
+    """Retrieve candidate herbs and formulas from the jnuherb database.
+
+    Uses a multi-channel scoring strategy:
+
+    1. Keyword overlap against database text fields (classic RAG).
+    2. Syndrome-profile keyword boosting for classic formulas.
+    3. Synthetic records for classic formulas missing from the DB.
+
+    Args:
+        symptoms: Patient symptom description.
+        top_k_herbs: Number of top herbs to return.
+        top_k_formulas: Number of top formula candidates to return.
+
+    Returns:
+        Dict with keys ``herbs`` and ``formulas``. Each is a list of dicts
+        containing record fields plus a ``match_score`` and optionally
+        ``match_source`` / ``_synthetic``.
+    """
+    from jnuherb._data import _load_table
+
+    keywords = _extract_symptom_keywords(symptoms)
+    if not keywords:
+        return {"herbs": [], "formulas": []}
+
+    # Herb fields to search
+    tcm_df = _load_table("jnuherb_tcm")
+    herb_text_fields = [
+        "cn_name", "pinyin_name", "en_name", "Properties", "Meridians",
+        "Function", "Indication", "Clinical_manifestations",
+        "Therapeutic_en_class", "Therapeutic_cn_class",
+    ]
+    herb_records = _score_records(tcm_df, herb_text_fields, keywords)
+
+    # Formula channel 1: database keyword overlap
+    # Enrichment columns (Syndromes_zh/en, Indications_en, Formula_alias,
+    # Formula_category, Formula_type) are added by scripts/ingest_herb_formula.py;
+    # _score_records skips columns absent from the table, so this is graceful.
+    fml_df = _load_table("jnuherb_formula")
+    formula_text_fields = [
+        "name", "Prescription Composition", "Instructions",
+        "Treatment Symptoms", "Source Document",
+        "Syndromes_zh", "Syndromes_en", "Indications_en",
+        "Formula_alias", "Formula_category", "Formula_type",
+    ]
+    formula_records = _score_records(fml_df, formula_text_fields, keywords)
+    for r in formula_records:
+        r["match_source"] = "database"
+
+    # Formula channel 2: syndrome-profile boosting + missing-formula fallback
+    profile_boosts = _score_formulas_by_profile(symptoms, keywords)
+
+    # Merge and re-rank formula candidates
+    merged_formulas = _merge_formula_scores(formula_records, profile_boosts)
+
+    return {
+        "herbs": herb_records[:top_k_herbs],
+        "formulas": merged_formulas[:top_k_formulas],
+    }
+
+
+def _find_formula_in_db(name: str, hvpid: Optional[str] = None) -> Optional[dict[str, Any]]:
+    """Find a formula record by name or HVPID, or return a synthetic record.
+
+    Synthetic records are used for classic formulas that are not yet present
+    in the bundled database so that the LLM can still recommend them when the
+    syndrome pattern matches, while the downstream UI can flag them.
+    """
+    from jnuherb._data import _load_table
+
+    fml_df = _load_table("jnuherb_formula")
+    if hvpid:
+        match = fml_df[fml_df["HVPID"] == hvpid]
+        if len(match) > 0:
+            row = match.iloc[0].to_dict()
+            row["_synthetic"] = False
+            return row
+
+    mask = fml_df["name"].str.contains(name, na=False, case=False)
+    if mask.any():
+        row = fml_df[mask].iloc[0].to_dict()
+        row["_synthetic"] = False
+        return row
+
+    return None
+
+
+def _score_formulas_by_profile(
+    symptoms: str,
+    keywords: list[str],
+) -> list[dict[str, Any]]:
+    """Score classic formulas by overlap with their syndrome profiles.
+
+    Returns database records (or synthetic records for missing formulas)
+    with a profile-derived match_score.
+    """
+    profiles = _load_syndrome_profiles()
+    symptoms_lower = symptoms.lower()
+    scored: list[dict[str, Any]] = []
+
+    for name, profile in profiles.items():
+        score = 0
+        sources: list[str] = []
+
+        # Match against key_symptoms (Chinese terms have higher weight)
+        for kw in profile.get("key_symptoms", []):
+            if len(kw) <= 1:
+                continue
+            if kw.lower() in symptoms_lower:
+                # Chinese terms are usually short and precise; weight them higher
+                weight = 3 if re.search(r"[一-鿿]", kw) else 1
+                score += weight
+
+        # Direct syndrome-pattern mention is a strong signal
+        pattern_zh = profile.get("syndrome_pattern_zh", "")
+        if pattern_zh and pattern_zh in symptoms:
+            score += 8
+            sources.append("syndrome_pattern")
+
+        if score == 0:
+            continue
+
+        db_record = _find_formula_in_db(name, profile.get("hvpid") or None)
+        if db_record is None:
+            db_record = {
+                "HVPID": profile.get("hvpid") or "UNKNOWN",
+                "name": name,
+                "Prescription Composition": "",
+                "Instructions": "",
+                "Treatment Symptoms": "",
+                "Source Document": profile.get("source_classic", ""),
+                "_synthetic": True,
+            }
+        db_record["match_score"] = score
+        db_record["match_source"] = "profile"
+        scored.append(db_record)
+
+    return scored
+
+
+def _merge_formula_scores(
+    db_records: list[dict[str, Any]],
+    profile_records: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Merge database keyword scores with profile-boosted scores.
+
+    If a formula appears in both channels, scores are summed.
+    """
+    merged: dict[str, dict[str, Any]] = {}
+
+    for r in db_records:
+        name = r.get("name", "")
+        if not name:
+            continue
+        merged[name] = dict(r)
+
+    for r in profile_records:
+        name = r.get("name", "")
+        if not name:
+            continue
+        if name in merged:
+            existing = merged[name]
+            existing["match_score"] = existing.get("match_score", 0) + r.get("match_score", 0)
+            existing["match_source"] = "database+profile"
+            existing["_synthetic"] = existing.get("_synthetic", False) and r.get("_synthetic", False)
+        else:
+            merged[name] = dict(r)
+
+    # Sort by score descending
+    return sorted(merged.values(), key=lambda x: x.get("match_score", 0), reverse=True)
+
+
+def _extract_symptom_keywords(text: str) -> list[str]:
+    """Extract symptom keywords from user input.
+
+    Matches known Chinese/English symptom terms in the raw text, expands
+    Chinese symptoms to their English synonyms, and removes common
+    stopwords. This ensures bilingual database fields are covered.
+    """
+    # Keep Chinese characters, English letters, digits, and whitespace
+    cleaned = re.sub(r"[^一-龥a-zA-Z0-9\s]", " ", text)
+    tokens = [t.strip() for t in cleaned.split() if len(t.strip()) >= 2]
+
+    stopwords = {
+        "的", "了", "和", "或", "是", "在", "有", "我", "你", "他", "她", "它",
+        "们", "这", "那", "等", "及", "与", "并", "但", "而", "个", "为", "以",
+        "可", "能", "会", "要", "不", "无", "如", "例如", "感觉", "出现", "伴有",
+        "明显", "加重", "缓解", "患者", "病人", "自述", "主诉", "出现", "大约",
+        "最近", "目前", "现在", "已经", "有些", "有时", "经常", "持续",
+    }
+    tokens = [t for t in tokens if t.lower() not in stopwords]
+
+    # Extract known symptom terms from raw text (handles multi-character
+    # symptoms that may be embedded in longer phrases such as "头痛发热")
+    expanded = []
+    text_lower = text.lower()
+    for cn_term, en_terms in _SYMPTOM_TRANSLATIONS.items():
+        if cn_term in text:
+            expanded.extend([cn_term] + en_terms)
+
+    # Also include any English tokens directly present in the input
+    for t in tokens:
+        if re.search(r"[a-zA-Z]", t):
+            expanded.append(t)
+
+    # Deduplicate while preserving order
+    seen = set()
+    out = []
+    for t in expanded:
+        key = t.lower()
+        if key not in seen:
+            seen.add(key)
+            out.append(t)
+    return out
+
+
+def _score_records(
+    df,
+    text_columns: list[str],
+    keywords: list[str],
+) -> list[dict[str, Any]]:
+    """Score dataframe rows by keyword overlap across text columns."""
+    if df.empty or not keywords:
+        return []
+
+    available_cols = [c for c in text_columns if c in df.columns]
+    if not available_cols:
+        return []
+
+    # Concatenate relevant text columns per row
+    text_series = df[available_cols].fillna("").astype(str).agg(" ".join, axis=1)
+    text_series = text_series.str.lower()
+
+    scores = np.zeros(len(df), dtype=int)
+    for kw in keywords:
+        kw_lower = kw.lower()
+        scores += text_series.str.contains(kw_lower, regex=False, na=False).astype(int)
+
+    if scores.max() == 0:
+        return []
+
+    df = df.copy()
+    df["match_score"] = scores
+    df = df[df["match_score"] > 0].sort_values("match_score", ascending=False)
+    return df.to_dict(orient="records")
+
+
+def _build_rag_context(candidates: dict[str, Any]) -> str:
+    """Build a context string from retrieved candidates for the LLM prompt."""
+    lines = ["=== 数据库候选（请严格从中选择推荐）/ Database candidates (recommend ONLY from this list) ==="]
+
+    herb_list = candidates.get("herbs", [])
+    formula_list = candidates.get("formulas", [])
+
+    if not herb_list and not formula_list:
+        lines.append(
+            "未在数据库中检索到与用户症状直接匹配的草药或方剂。"
+            "No herbs or formulas directly matching the user's symptoms were found in the database."
+        )
+        return "\n".join(lines)
+
+    lines.append("\n--- 候选草药 / Candidate herbs ---")
+    for i, h in enumerate(herb_list, 1):
+        cn = h.get("cn_name", "")
+        en = h.get("en_name", "")
+        func = h.get("Function", "") or ""
+        ind = h.get("Indication", "") or ""
+        lines.append(
+            f"{i}. {cn} ({en}) - Function/功效: {func[:80]}; Indication/主治: {ind[:80]}"
+        )
+
+    lines.append("\n--- 候选方剂 / Candidate formulas ---")
+    for i, f in enumerate(formula_list, 1):
+        name = f.get("name", "")
+        symptoms = f.get("Treatment Symptoms", "") or ""
+        composition = f.get("Prescription Composition", "") or ""
+        synd_zh = f.get("Syndromes_zh", "") or ""
+        synd_en = f.get("Syndromes_en", "") or ""
+        ind_en = f.get("Indications_en", "") or ""
+        synthetic_flag = " [数据库暂未收录 / not in DB]" if f.get("_synthetic", False) else ""
+        extra_bits = []
+        if synd_zh:
+            extra_bits.append(f"Syndrome/证型: {synd_zh[:60]}"
+                              + (f" ({synd_en[:60]})" if synd_en else ""))
+        if ind_en:
+            extra_bits.append(f"Indication: {ind_en[:80]}")
+        extra = "; " + "; ".join(extra_bits) if extra_bits else ""
+        lines.append(
+            f"{i}. {name}{synthetic_flag} - Symptoms/主治: {symptoms[:100]}; Composition/组成: {composition[:80]}{extra}"
+        )
+
+    return "\n".join(lines)
+
+
+def validate_recommendation(
+    parsed: dict[str, Any],
+    candidates: dict[str, Any],
+) -> dict[str, Any]:
+    """Post-process and validate AI recommendations against syndrome profiles.
+
+    Checks:
+    1. Whether recommended formulas match the inferred syndrome pattern.
+    2. Whether any contraindicated pattern appears.
+    3. Whether recommended formulas are present in the database.
+
+    Adds keys ``validation_warnings``, ``syndrome_formula_match``,
+    and ``db_coverage`` to the parsed result.
+    """
+    profiles = _load_syndrome_profiles()
+
+    syndrome_zh = parsed.get("syndrome", {}).get("zh", "")
+    syndrome_en = parsed.get("syndrome", {}).get("en", "")
+    formulas_zh = parsed.get("formulas", {}).get("zh", [])
+
+    warnings: list[str] = []
+    match_results: dict[str, bool] = {}
+    db_coverage: dict[str, bool] = {}
+
+    for fml_name in formulas_zh:
+        profile = profiles.get(fml_name)
+
+        # Database coverage: query the actual database regardless of candidates
+        db_record = _find_formula_in_db(fml_name, profile.get("hvpid") if profile else None)
+        in_db = db_record is not None and not db_record.get("_synthetic", False)
+        db_coverage[fml_name] = in_db
+
+        if not profile:
+            if not in_db:
+                warnings.append(
+                    f"提示：推荐方剂【{fml_name}】暂不在数据库中，请人工复核。"
+                )
+            continue
+
+        # Syndrome-pattern consistency (substring match to tolerate variants)
+        pattern_zh = profile.get("syndrome_pattern_zh", "")
+        pattern_en = profile.get("syndrome_pattern_en", "")
+        match = bool(pattern_zh and pattern_zh in syndrome_zh)
+        if not match and pattern_en:
+            match = pattern_en.lower() in syndrome_en.lower()
+        match_results[fml_name] = match
+
+        if not match:
+            warnings.append(
+                f"注意：推荐方剂【{fml_name}】与推断证型可能不匹配。"
+                f"该方剂典型对应证型为【{pattern_zh}】，"
+                f"但当前推断证型为【{syndrome_zh}】，请结合临床复核。"
+            )
+
+        # Contraindications
+        for contra in profile.get("contraindications", []):
+            if contra in syndrome_zh:
+                warnings.append(
+                    f"警告：推荐方剂【{fml_name}】禁忌证型包含【{contra}】，"
+                    f"但当前推断证型出现此特征，请避免使用。"
+                )
+
+        if not in_db:
+            warnings.append(
+                f"提示：推荐方剂【{fml_name}】暂不在数据库中，后续网络药理学分析可能受限。"
+            )
+
+    parsed["validation_warnings"] = warnings
+    parsed["syndrome_formula_match"] = match_results
+    parsed["db_coverage"] = db_coverage
     return parsed
 
 
@@ -243,6 +955,43 @@ def _call_deepseek(
         raise RuntimeError(
             f"Unexpected DeepSeek API response format: {resp.text[:200]}"
         )
+
+
+def _normalize_bilingual(parsed: dict[str, Any]) -> dict[str, Any]:
+    """Ensure legacy/single-language responses are upgraded to bilingual format.
+
+    Returns a dict where ``syndrome``, ``analysis``, ``explanation`` are
+    ``{"zh": ..., "en": ...}`` and ``herbs`` / ``formulas`` are
+    ``{"zh": [...], "en": [...]}``.
+    """
+    out: dict[str, Any] = {}
+
+    # Text fields
+    for key in ("syndrome", "analysis", "explanation"):
+        val = parsed.get(key, "")
+        if isinstance(val, dict) and "zh" in val and "en" in val:
+            out[key] = val
+        elif isinstance(val, str):
+            out[key] = {"zh": val, "en": val}
+        else:
+            out[key] = {"zh": "", "en": ""}
+
+    # List fields
+    for key in ("herbs", "formulas"):
+        val = parsed.get(key, [])
+        if isinstance(val, dict) and "zh" in val and "en" in val:
+            out[key] = val
+        elif isinstance(val, list):
+            out[key] = {"zh": val, "en": val}
+        else:
+            out[key] = {"zh": [], "en": []}
+
+    # Preserve any extra keys
+    for key, val in parsed.items():
+        if key not in out:
+            out[key] = val
+
+    return out
 
 
 def _parse_response(text: str) -> dict[str, Any]:

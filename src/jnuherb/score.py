@@ -227,10 +227,12 @@ def component(
     weights_base = np.ones(n_items, dtype=int)
     names_vec = items_and_score[by].values
     values = items_and_score["Importance Score"].astype(float).values
-    n_select = max(1, int(np.ceil(n_items / 10)))
+    # Cap subset size to keep knapsack DP fast even with many candidates
+    n_select = min(max(1, int(np.ceil(n_items / 10))), 30)
 
     dp_scores: list[float] = []
     items_ls: list[list[str]] = []
+    forbidden_sets: list[frozenset[str]] = []
 
     for i in range(num):
         indices = rng.permutation(n_items)[:n_select]
@@ -238,10 +240,11 @@ def component(
         cur_names = names_vec[indices]
         cur_values = values[indices]
 
-        result = _knapsack(cur_weights, cur_names, cur_values, items_ls, c)
+        result = _knapsack(cur_weights, cur_names, cur_values, forbidden_sets, c)
         if result is not None:
             dp_scores.append(result["dp"])
             items_ls.append(result["items"])
+            forbidden_sets.append(frozenset(result["items"]))
 
     components_df = pd.DataFrame(
         {
@@ -277,7 +280,7 @@ def _knapsack(
     weights: np.ndarray,
     names_vec: np.ndarray,
     values: np.ndarray,
-    forbidden_combinations: list[list[str]],
+    forbidden_combinations: list[frozenset[str]],
     c: int = 10,
 ) -> Optional[dict]:
     """Knapsack DP with probability-union recurrence.
@@ -290,7 +293,8 @@ def _knapsack(
         weights: Item weights (all 1 for equal weighting).
         names_vec: Item names/IDs.
         values: Item Importance Scores.
-        forbidden_combinations: Previously found combinations to avoid.
+        forbidden_combinations: Previously found combinations to avoid,
+            represented as frozensets for fast intersection checks.
         c: Capacity parameter.
 
     Returns:
@@ -300,6 +304,12 @@ def _knapsack(
     n = len(weights)
     capacity = c + 1  # DP table columns (0..c)
 
+    # Build name -> forbidden sets containing that name for fast lookup
+    name_to_forbidden: dict[str, list[frozenset[str]]] = {}
+    for forbidden in forbidden_combinations:
+        for name in forbidden:
+            name_to_forbidden.setdefault(name, []).append(forbidden)
+
     dp = np.zeros((n + 1, capacity))
     items = np.empty((n + 1, capacity), dtype=object)
     for i in range(n + 1):
@@ -307,17 +317,21 @@ def _knapsack(
             items[i, j] = ""
 
     for i in range(n):
+        name_i = names_vec[i]
+        relevant_forbidden = name_to_forbidden.get(name_i, [])
+
         for j in range(1, capacity):
             if weights[i] <= j:
-                # Check for conflicts with forbidden combinations
+                # Check for conflicts with relevant forbidden combinations
                 conflict = False
-                for combination in forbidden_combinations:
-                    if names_vec[i] in combination:
-                        prev_items = items[i, j - weights[i]]
-                        prev_set = set(prev_items.split(", ")) if prev_items else set()
-                        if prev_set & set(combination):
-                            conflict = True
-                            break
+                if relevant_forbidden:
+                    prev_items = items[i, j - weights[i]]
+                    if prev_items:
+                        prev_set = set(prev_items.split(", "))
+                        for forbidden in relevant_forbidden:
+                            if prev_set & forbidden:
+                                conflict = True
+                                break
 
                 if conflict:
                     dp[i + 1, j] = dp[i, j]
@@ -329,9 +343,9 @@ def _knapsack(
                         dp[i + 1, j] = new_val
                         prev_str = items[i, j - weights[i]]
                         if prev_str:
-                            items[i + 1, j] = f"{names_vec[i]}, {prev_str}"
+                            items[i + 1, j] = f"{name_i}, {prev_str}"
                         else:
-                            items[i + 1, j] = names_vec[i]
+                            items[i + 1, j] = name_i
                     else:
                         dp[i + 1, j] = dp[i, j]
                         items[i + 1, j] = items[i, j]

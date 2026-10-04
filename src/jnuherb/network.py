@@ -25,6 +25,21 @@ import seaborn as sns
 # Use non-interactive backend for headless environments
 matplotlib.use("Agg")
 
+# Register bundled Chinese font so PDF/PNG exports render CJK characters correctly.
+try:
+    from importlib.resources import files
+    from matplotlib import font_manager
+
+    _font_path = files("jnuherb.data.fonts").joinpath("NotoSansCJKsc-Regular.otf")
+    if _font_path.exists():
+        font_manager.fontManager.addfont(str(_font_path))
+        plt.rcParams["font.family"] = ["Noto Sans CJK SC", "sans-serif"]
+    else:
+        plt.rcParams["font.family"] = ["sans-serif"]
+except Exception:
+    plt.rcParams["font.family"] = ["sans-serif"]
+plt.rcParams["axes.unicode_minus"] = False
+
 
 # ---------------------------------------------------------------------------
 # filter_formula_network

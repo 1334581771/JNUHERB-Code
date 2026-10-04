@@ -24,6 +24,14 @@ services:
       - JNUHERB_HOST=0.0.0.0
       - JNUHERB_PORT=8501
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '1.5'
+          memory: 3G
+        reservations:
+          cpus: '0.5'
+          memory: 1G
     # Mount results directory to persist analysis outputs
     volumes:
       - jnuherb_results:/home/jnuherb/results

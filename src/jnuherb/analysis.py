@@ -41,9 +41,10 @@ def dfs_filter(
 ) -> dict[str, Optional[pd.DataFrame]]:
     """Filter nodes to keep only complete pathways.
 
-    Performs a depth-first traversal from formula (if present) → TCM →
-    chemical → protein, keeping only nodes that participate in at least
-    one complete path ending at a valid target protein.
+    Keeps only nodes that participate in at least one complete path
+    ending at a valid target protein. Implemented as a backward pass
+    from proteins → chemicals → TCMs → formulas using set operations,
+    which is much faster than the original nested-loop forward traversal.
 
     Args:
         formula: Formula information (or None if not in formula mode).
@@ -59,61 +60,46 @@ def dfs_filter(
         ``tcm_chem_links``, ``chem``, ``chem_protein_links``, ``proteins``
         containing filtered DataFrames (or None where appropriate).
     """
-    # Collect valid node IDs
-    formula_id_set: set[str] = set()
-    tcm_id_set: set[str] = set()
-    chem_id_set: set[str] = set()
-    proteins_id_set: set[str] = set()
+    target_protein_ids = set(proteins["Ensembl_ID"])
 
-    # Determine starting formula IDs
+    # Backward pass: start from target proteins
+    valid_chem_protein_links = chem_protein_links[
+        chem_protein_links["Ensembl_ID"].isin(target_protein_ids)
+    ]
+    chem_id_set = set(valid_chem_protein_links["HVCID"])
+
+    valid_tcm_chem_links = tcm_chem_links[
+        tcm_chem_links["HVCID"].isin(chem_id_set)
+    ]
+    tcm_id_set = set(valid_tcm_chem_links["HVMID"])
+
+    formula_id_set: Optional[set[str]] = None
     if formula_tcm_links is not None and formula is not None:
-        formula_ids = set(formula["HVPID"])
-    else:
-        formula_ids = {"0"}  # sentinel – no formula layer
-
-    for f in formula_ids:
-        if formula_tcm_links is None:
-            tcm_ids_iter = set(tcm["HVMID"])
-        else:
-            tcm_ids_iter = set(
-                formula_tcm_links.loc[
-                    formula_tcm_links["HVPID"] == f, "HVMID"
-                ]
-            )
-
-        for m in tcm_ids_iter:
-            c_ids = set(
-                tcm_chem_links.loc[
-                    tcm_chem_links["HVMID"] == m, "HVCID"
-                ]
-            )
-            for c_val in c_ids:
-                p_ids = set(
-                    chem_protein_links.loc[
-                        chem_protein_links["HVCID"] == c_val, "Ensembl_ID"
-                    ]
-                )
-                valid_p = p_ids & set(proteins["Ensembl_ID"])
-                if valid_p:
-                    if formula_tcm_links is not None:
-                        formula_id_set.add(f)
-                    tcm_id_set.add(m)
-                    chem_id_set.add(c_val)
-                    proteins_id_set.update(valid_p)
+        valid_formula_tcm_links = formula_tcm_links[
+            formula_tcm_links["HVMID"].isin(tcm_id_set)
+        ]
+        formula_id_set = set(valid_formula_tcm_links["HVPID"])
 
     # Filter each DataFrame
-    if formula is not None:
-        formula = formula[
-            formula["HVPID"].isin(formula_id_set)
-        ].copy()
+    if formula is not None and formula_id_set is not None:
+        formula = formula[formula["HVPID"].isin(formula_id_set)].copy()
     if formula_tcm_links is not None:
-        formula_tcm_links = formula_tcm_links[
-            formula_tcm_links["HVPID"].isin(formula_id_set)
-            & formula_tcm_links["HVMID"].isin(tcm_id_set)
-        ].copy()
+        if formula_id_set is not None:
+            formula_tcm_links = formula_tcm_links[
+                formula_tcm_links["HVPID"].isin(formula_id_set)
+                & formula_tcm_links["HVMID"].isin(tcm_id_set)
+            ].copy()
+        else:
+            formula_tcm_links = formula_tcm_links[
+                formula_tcm_links["HVMID"].isin(tcm_id_set)
+            ].copy()
+
     tcm = tcm[tcm["HVMID"].isin(tcm_id_set)].copy()
     chem = chem[chem["HVCID"].isin(chem_id_set)].copy()
-    proteins = proteins[proteins["Ensembl_ID"].isin(proteins_id_set)].copy()
+
+    # Proteins: keep only those actually connected to surviving chemicals
+    connected_protein_ids = set(valid_chem_protein_links["Ensembl_ID"])
+    proteins = proteins[proteins["Ensembl_ID"].isin(connected_protein_ids)].copy()
 
     tcm_chem_links = tcm_chem_links[
         tcm_chem_links["HVMID"].isin(tcm_id_set)
@@ -121,7 +107,7 @@ def dfs_filter(
     ].copy()
     chem_protein_links = chem_protein_links[
         chem_protein_links["HVCID"].isin(chem_id_set)
-        & chem_protein_links["Ensembl_ID"].isin(proteins_id_set)
+        & chem_protein_links["Ensembl_ID"].isin(connected_protein_ids)
     ].copy()
 
     # Reset indices

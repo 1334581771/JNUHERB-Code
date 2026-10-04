@@ -130,7 +130,14 @@ def get_chemicals(by: str, items: ItemsLike) -> pd.DataFrame:
     """
     items_list = _ensure_list(items)
     df = _load_table("jnuherb_chemicals")
-    result = df[df[by].isin(items_list)].copy()
+    if by == "Name":
+        # Case-insensitive matching for chemical names so that e.g.
+        # "Deoxyshikonin" resolves to the database entry "deoxyshikonin".
+        items_lower = {str(i).lower() for i in items_list}
+        mask = df[by].str.lower().isin(items_lower)
+    else:
+        mask = df[by].isin(items_list)
+    result = df[mask].copy()
     result = result.drop_duplicates(subset=["HVCID"])
     result.reset_index(drop=True, inplace=True)
     return result

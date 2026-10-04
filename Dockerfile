@@ -11,6 +11,23 @@
 #   docker run -p 8501:8501 -v $(pwd)/results:/home/jnuherb/results jnuherb
 # =============================================================================
 
+# ---- Stage 1: build binary wheels for the docking stack ----
+# vina is a C++/SWIG extension linked against boost; rdkit ships manylinux
+# wheels but pulling everything through one builder keeps the final image
+# free of compilers. Runtime boost libraries ARE still required (see stage 2).
+FROM python:3.11-slim AS dockbuilder
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+       g++ swig libboost-all-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip wheel --no-cache-dir --wheel-dir /wheels \
+    -i https://mirrors.aliyun.com/pypi/simple/ \
+    "rdkit>=2023.3" "meeko>=0.5" "gemmi>=0.6" "scipy>=1.10" "prody>=2.4" \
+    "py3Dmol>=2.0" "vina>=1.2.3"
+
+# ---- Stage 2: runtime image ----
 FROM python:3.11-slim
 
 LABEL org.opencontainers.image.title="jnuherb"
@@ -21,8 +38,16 @@ LABEL org.opencontainers.image.version="0.1.0"
 RUN sed -i 's|http://deb.debian.org/debian|https://mirrors.aliyun.com/debian|g' /etc/apt/sources.list.d/debian.sources \
     && sed -i 's|http://deb.debian.org/debian-security|https://mirrors.aliyun.com/debian-security|g' /etc/apt/sources.list.d/debian.sources \
     && apt-get update \
-    && apt-get install -y --no-install-recommends curl \
+    && apt-get install -y --no-install-recommends curl fontconfig \
+       # runtime boost libraries needed by the vina extension module
+       # (must match the libboost-all-dev default in the builder stage)
+       libboost-thread1.88.0 libboost-serialization1.88.0 \
+       libboost-filesystem1.88.0 libboost-program-options1.88.0 \
     && rm -rf /var/lib/apt/lists/*
+
+# ---- Install bundled Chinese font so PDF exports can render CJK characters ----
+COPY src/jnuherb/data/fonts/NotoSansCJKsc-Regular.otf /usr/share/fonts/opentype/noto/NotoSansCJKsc-Regular.otf
+RUN fc-cache -f -v
 
 # ---- App user (non-root) ----
 RUN useradd --create-home --shell /bin/bash jnuherb
@@ -47,7 +72,12 @@ RUN pip install --no-cache-dir --user \
     plotly>=5.14.0 \
     streamlit>=1.28.0 \
     gseapy>=1.0.0 \
-    requests>=2.28.0
+    requests>=2.28.0 \
+    kaleido==0.2.1
+
+# ---- Docking stack (pre-built wheels from stage 1) ----
+COPY --from=dockbuilder --chown=jnuherb:jnuherb /wheels /tmp/wheels
+RUN pip install --no-cache-dir --user /tmp/wheels/*.whl && rm -rf /tmp/wheels
 
 # ---- Copy and install the package ----
 COPY --chown=jnuherb:jnuherb src/ /home/jnuherb/app/src/
