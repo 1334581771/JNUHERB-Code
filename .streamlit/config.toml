@@ -19,8 +19,10 @@ showErrorDetails = false
 showSidebarNavigation = true
 
 [theme]
-primaryColor = "#3c8dbc"
-backgroundColor = "#f4f6f9"
+# "Herbal medicine + academic" palette: deep herbal green primary, warm
+# paper-white background, cinnabar accents come from buttons/alerts.
+primaryColor = "#2e7d5b"
+backgroundColor = "#faf9f6"
 secondaryBackgroundColor = "#ffffff"
 textColor = "#2c3e50"
 font = "sans serif"

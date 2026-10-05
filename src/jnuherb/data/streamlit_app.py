@@ -53,12 +53,81 @@ st.set_page_config(
 )
 
 # Hide Streamlit default chrome (Deploy button, "Made with Streamlit" footer, etc.)
+# plus the JNUHERB brand styles (hero banner, entry cards).
 # NOTE: do NOT hide `header` because it contains the sidebar toggle button.
 _HIDE_STYLES = """
 <style>
 #MainMenu {visibility: hidden;}
 footer {visibility: hidden;}
 .stDeployButton {display: none !important;}
+
+/* ---- Brand: hero banner ---- */
+.jnu-hero {
+    background: linear-gradient(135deg, #1f5c46 0%, #2e7d5b 60%, #3d9970 100%);
+    border-radius: 14px;
+    padding: 2.2rem 2.4rem 1.8rem 2.4rem;
+    color: #ffffff;
+    margin-bottom: 1.2rem;
+}
+.jnu-hero-title {
+    font-size: 2.4rem;
+    font-weight: 800;
+    letter-spacing: 0.02em;
+    line-height: 1.1;
+}
+.jnu-hero-sub {
+    font-size: 1.02rem;
+    opacity: 0.92;
+    margin-top: 0.5rem;
+    max-width: 46rem;
+}
+.jnu-hero-stats {
+    margin-top: 1.1rem;
+    font-size: 0.92rem;
+    opacity: 0.95;
+}
+.jnu-hero-stats b {
+    font-size: 1.15rem;
+    font-weight: 700;
+}
+.jnu-hero-stats .jnu-stat {
+    display: inline-block;
+    margin-right: 1.4rem;
+}
+
+/* ---- Brand: entry cards ---- */
+.jnu-card-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 1rem;
+    grid-auto-rows: 1fr;
+    margin-bottom: 0.4rem;
+}
+@media (max-width: 640px) {
+    .jnu-card-grid { grid-template-columns: 1fr; }
+}
+.jnu-card {
+    border: 1px solid #e3e0d8;
+    border-radius: 12px;
+    padding: 1.2rem 1.3rem;
+    background: #ffffff;
+    height: 100%;
+}
+.jnu-card h3 {
+    margin: 0 0 0.4rem 0;
+    font-size: 1.12rem;
+    color: #1f5c46;
+}
+.jnu-card p {
+    margin: 0.25rem 0;
+    font-size: 0.92rem;
+    color: #4a5568;
+}
+.jnu-card .jnu-card-arrow {
+    font-size: 1.05rem;
+    color: #2e7d5b;
+    font-weight: 600;
+}
 </style>
 """
 st.markdown(_HIDE_STYLES, unsafe_allow_html=True)
@@ -882,12 +951,19 @@ st.sidebar.markdown("---")
 
 # ---- Analysis Mode ----
 st.sidebar.subheader("Analysis Mode")
+# Short pill labels with a new widget key; direction explained by the caption.
 analysis_mode = st.sidebar.radio(
     "Choose direction",
-    ["Reverse (Proteins → TCMs)", "Forward (TCMs / Formulas → Proteins)"],
-    key="analysis_mode",
+    ["🎯 Reverse", "🚀 Forward"],
+    key="analysis_mode_sel",
+    horizontal=True,
+    label_visibility="collapsed",
 )
-is_forward = analysis_mode.startswith("Forward")
+is_forward = analysis_mode.startswith("🚀")
+if is_forward:
+    st.sidebar.caption("🚀 Forward: TCMs / Formulas / Monomers → Proteins")
+else:
+    st.sidebar.caption("🎯 Reverse: Target Proteins → Chemicals → TCMs → Formulas")
 
 st.sidebar.markdown("---")
 
@@ -937,31 +1013,31 @@ if is_forward:
         )
         forward_id_type = "Name"
 
-    st.sidebar.subheader("Optional Filters")
-    forward_proteins_text = st.sidebar.text_area(
-        "Restrict to specific proteins (optional, one per line)",
-        placeholder="ENSP00000381588\nENSP00000252519",
-        height=80,
-        key="forward_proteins",
-    )
+    with st.sidebar.expander("🎛️ Filters (optional)", expanded=False):
+        forward_proteins_text = st.text_area(
+            "Restrict to specific proteins (one per line)",
+            placeholder="ENSP00000381588\nENSP00000252519",
+            height=80,
+            key="forward_proteins",
+        )
 
-    # Reset the score threshold when the user switches to/from Monomer.
-    # The default score for monomers is 0 (inclusive) because many monomers
-    # have only low-confidence targets; for TCM/formula it defaults to 900.
-    # Widget state persists across reruns, so we explicitly update it when
-    # the entity type changes.
-    _prev_entity = st.session_state.get("_prev_forward_entity_type")
-    _is_monomer = forward_entity_type == "Monomer (单体)"
-    if _prev_entity != forward_entity_type or "forward_score" not in st.session_state:
-        st.session_state.forward_score = 0 if _is_monomer else 900
-    st.session_state._prev_forward_entity_type = forward_entity_type
+        # Reset the score threshold when the user switches to/from Monomer.
+        # The default score for monomers is 0 (inclusive) because many monomers
+        # have only low-confidence targets; for TCM/formula it defaults to 900.
+        # Widget state persists across reruns, so we explicitly update it when
+        # the entity type changes.
+        _prev_entity = st.session_state.get("_prev_forward_entity_type")
+        _is_monomer = forward_entity_type == "Monomer (单体)"
+        if _prev_entity != forward_entity_type or "forward_score" not in st.session_state:
+            st.session_state.forward_score = 0 if _is_monomer else 900
+        st.session_state._prev_forward_entity_type = forward_entity_type
 
-    forward_score = st.sidebar.number_input(
-        "Combined Score Threshold",
-        min_value=0, max_value=1000,
-        help="Lower = more results, Higher = more confident links",
-        key="forward_score",
-    )
+        forward_score = st.number_input(
+            "Combined Score Threshold",
+            min_value=0, max_value=1000,
+            help="Lower = more results, Higher = more confident links",
+            key="forward_score",
+        )
 else:
     # ===== REVERSE MODE =====
     st.sidebar.subheader("Target Proteins")
@@ -977,24 +1053,24 @@ else:
         key="reverse_id_type",
     )
 
-    st.sidebar.subheader("Formula Filter (optional)")
-    formula_text = st.sidebar.text_area(
-        "TCM names to filter by (one per line, optional)",
-        placeholder="熟地黄\n山药\n山茱萸",
-        height=80,
-        key="formula_text",
-    )
-    formula_id_type = st.sidebar.selectbox(
-        "Formula ID Type",
-        ["cn_name", "HVMID", "pinyin_name", "en_name", "latin_name"],
-        key="formula_id_type",
-    )
+    with st.sidebar.expander("🎛️ Formula filter & score (optional)", expanded=False):
+        formula_text = st.text_area(
+            "TCM names to filter by (one per line)",
+            placeholder="熟地黄\n山药\n山茱萸",
+            height=80,
+            key="formula_text",
+        )
+        formula_id_type = st.selectbox(
+            "Formula ID Type",
+            ["cn_name", "HVMID", "pinyin_name", "en_name", "latin_name"],
+            key="formula_id_type",
+        )
 
-    reverse_score = st.sidebar.number_input(
-        "Combined Score Threshold",
-        value=0, min_value=0, max_value=1000,
-        key="reverse_score",
-    )
+        reverse_score = st.number_input(
+            "Combined Score Threshold",
+            value=0, min_value=0, max_value=1000,
+            key="reverse_score",
+        )
 
 # Optimization defaults (previously exposed in sidebar; now hidden)
 opt_num = 100
@@ -1627,44 +1703,101 @@ is_fwd = result.get("is_forward", False) if result else False
 # ---- Tab 1: Overview ----
 with tabs[0]:
     if result is None:
-        st.info("👈 Choose an analysis mode, enter query terms, and click **Run Analysis**.")
         st.markdown("""
-        ### Quick Start Guide
+        <div class="jnu-hero">
+          <div class="jnu-hero-title">🌿 JNUHERB</div>
+          <div class="jnu-hero-sub">
+            Network pharmacology of traditional Chinese medicine — bidirectional
+            herb–ingredient–target analysis, AI-assisted syndrome differentiation,
+            TCM compatibility optimization, and molecular docking, in one web server.
+          </div>
+          <div class="jnu-hero-stats">
+            <span class="jnu-stat"><b>12,500+</b> formulas</span>
+            <span class="jnu-stat"><b>4,700+</b> herbs</span>
+            <span class="jnu-stat"><b>13,100+</b> chemicals</span>
+            <span class="jnu-stat"><b>14,200+</b> proteins</span>
+          </div>
+        </div>
+        """, unsafe_allow_html=True)
 
-        **Reverse mode** (Proteins → TCMs):
-        1. Select *Reverse* mode in the sidebar.
-        2. Enter target protein IDs (Ensembl IDs or gene names).
-        3. Optionally filter by specific TCM formula.
-        4. Click **Run Analysis**.
+        st.markdown("""
+        <div class="jnu-card-grid">
+          <div class="jnu-card">
+            <h3>🤖 AI &nbsp;<span class="jnu-card-arrow">Symptoms → TCMs</span></h3>
+            <p>Describe symptoms in natural language; the AI retrieves candidate
+               herbs and formulas from enriched syndrome and indication data.</p>
+            <p><b>When to use:</b> TCM syndrome interpretation and
+               evidence-guided prescription discovery.</p>
+            <p><b>Example:</b> <code>edema with oliguria</code> · <code>利水消肿</code></p>
+          </div>
+          <div class="jnu-card">
+            <h3>🚀 Forward &nbsp;<span class="jnu-card-arrow">TCMs / Formulas → Proteins</span></h3>
+            <p>Start from herbs, formulas or monomer ingredients and map them to
+               protein targets, pathways and dockable structures.</p>
+            <p><b>When to use:</b> mechanism elucidation of a known prescription
+               or ingredient.</p>
+            <p><b>Example:</b> <code>柴胡, 黄芩</code> · <code>HVP1625</code> · <code>berberine</code></p>
+          </div>
+          <div class="jnu-card">
+            <h3>🎯 Reverse &nbsp;<span class="jnu-card-arrow">Proteins → TCMs</span></h3>
+            <p>Start from disease targets (Ensembl IDs or gene names) and
+               discover candidate herbs, formulas and active ingredients.</p>
+            <p><b>When to use:</b> target-driven drug discovery, drug
+               repositioning, mechanism-guided formula selection.</p>
+            <p><b>Example:</b> <code>TNF, IL6, TP53</code></p>
+          </div>
+          <div class="jnu-card">
+            <h3>🔬 Virtual Screening &nbsp;<span class="jnu-card-arrow">Ligand → Protein</span></h3>
+            <p>Dock a candidate ingredient against a target protein with
+               AutoDock Vina; define the binding box by residue number or
+               manually.</p>
+            <p><b>When to use:</b> rapid ranking of active ingredients and
+               binding hypothesis generation.</p>
+            <p><b>Output:</b> Vina score + interactive 3D complex (PDB download).</p>
+          </div>
+        </div>
+        """, unsafe_allow_html=True)
 
-        **Forward mode** (TCMs / Formulas / Monomers → Proteins):
-        1. Select *Forward* mode and choose an entity type.
-        2. **TCM**: enter herb IDs or names (e.g. 柴胡, HVM0367).
-        3. **Formula**: enter formula IDs or names (e.g. HVP1625, 右归丸).
-        4. **Monomer**: enter chemical names (e.g. deoxyshikonin).
-        5. Optionally restrict to specific proteins and set a score threshold.
-        6. Click **Run Analysis**.
+        st.caption("👈 Start with **🤖 AI** or pick a direction in the sidebar "
+                   "(**🎯 Reverse** / **🚀 Forward**); dock top hits under **🔬 Docking**.")
 
-        ---
-        **Example — Reverse (Ensembl IDs):**
-        `ENSP00000381588` (TMPRSS2), `ENSP00000252519` (ALDH2)
+        with st.expander("📖 Detailed guide & more examples"):
+            st.markdown("""
+            **Reverse mode** (Proteins → TCMs):
+            1. Select *🎯 Reverse* in the sidebar.
+            2. Enter target protein IDs (Ensembl IDs or gene names).
+            3. Optionally filter by specific TCM formula (expand **Filters**).
+            4. Click **🚀 Run Analysis**.
 
-        **Example — Reverse (gene names):**
-        `TNF, IL6, TP53, PDCD1`
+            **Forward mode** (TCMs / Formulas / Monomers → Proteins):
+            1. Select *🚀 Forward* and choose an entity type.
+            2. **TCM**: enter herb IDs or names (e.g. 柴胡, HVM0367).
+            3. **Formula**: enter formula IDs or names (e.g. HVP1625, 右归丸).
+            4. **Monomer**: enter chemical names (e.g. deoxyshikonin).
+            5. Optionally restrict to specific proteins and set a score
+               threshold (expand **Filters**).
+            6. Click **🚀 Run Analysis**.
 
-        **Example — Forward TCM:**
-        `HVM0367, HVM1695` or `柴胡, 黄芩`
+            ---
+            **Example — Reverse (Ensembl IDs):**
+            `ENSP00000381588` (TMPRSS2), `ENSP00000252519` (ALDH2)
 
-        **Example — Forward Formula:**
-        `HVP1625` or `右归丸`
+            **Example — Reverse (gene names):**
+            `TNF, IL6, TP53, PDCD1`
 
-        **Example — Forward Monomer:**
-        `deoxyshikonin, berberine`
+            **Example — Forward TCM:**
+            `HVM0367, HVM1695` or `柴胡, 黄芩`
 
-        > ℹ️ The protein database contains ~14,200 proteins with known
-        > TCM-related chemical interactions, not the full human proteome.
-        > If your Ensembl IDs are not found, try using gene names instead.
-        """)
+            **Example — Forward Formula:**
+            `HVP1625` or `右归丸`
+
+            **Example — Forward Monomer:**
+            `deoxyshikonin, berberine`
+
+            > ℹ️ The protein database contains ~14,200 proteins with known
+            > TCM-related chemical interactions, not the full human proteome.
+            > If your Ensembl IDs are not found, try using gene names instead.
+            """)
     else:
         pr = result["protein_result"]
         ff = result["formula_filter"]
