@@ -1712,6 +1712,7 @@ with tabs[0]:
             TCM compatibility optimization, and molecular docking, in one web server.
           </div>
           <div class="jnu-hero-stats">
+            <span class="jnu-stat"><b>2,000+</b> syndromes</span>
             <span class="jnu-stat"><b>12,500+</b> formulas</span>
             <span class="jnu-stat"><b>4,700+</b> herbs</span>
             <span class="jnu-stat"><b>13,100+</b> chemicals</span>

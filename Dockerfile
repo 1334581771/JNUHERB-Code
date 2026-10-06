@@ -84,6 +84,15 @@ COPY --chown=jnuherb:jnuherb src/ /home/jnuherb/app/src/
 COPY --chown=jnuherb:jnuherb README.md LICENSE /home/jnuherb/app/
 RUN pip install --no-cache-dir --user /home/jnuherb/app/
 
+# ---- Bundled SQLite database ----
+# Build jnuherb.db from the CSV tables inside the installed package, then
+# drop the CSV copies (the app reads from the db; ensembl_uniprot.csv stays
+# because the docking module loads it directly).
+RUN python -m jnuherb.build_db && \
+    find /home/jnuherb/.local -path '*/jnuherb/data/jnuherb_*.csv' ! -name 'ensembl_uniprot.csv' -delete && \
+    rm -f /home/jnuherb/app/src/jnuherb/data/jnuherb_*.csv && \
+    ls -lh /home/jnuherb/.local/lib/python3.11/site-packages/jnuherb/data/jnuherb.db
+
 # ---- Streamlit config ----
 RUN mkdir -p /home/jnuherb/.streamlit
 COPY --chown=jnuherb:jnuherb .streamlit/config.toml /home/jnuherb/.streamlit/config.toml
