@@ -968,6 +968,19 @@ else:
 st.sidebar.markdown("---")
 
 # ---- Inputs (conditional on mode) ----
+
+# Defined at module level, before the widgets/run branch that call it:
+# Streamlit reruns this script top-to-bottom on every interaction, so a
+# def placed below its call site is not yet bound when that code runs
+# (NameError: name '_resolve_disease' is not defined).
+@st.cache_data(show_spinner="Resolving disease targets...")
+def _resolve_disease(disease: str, min_score: float, max_targets: int) -> dict | None:
+    """Disease name/id → seed Ensembl protein IDs (CTD / Open Targets)."""
+    from jnuherb.analysis import resolve_disease_to_targets
+    return resolve_disease_to_targets(disease, min_score=min_score,
+                                      max_targets=max_targets)
+
+
 if is_forward:
     # ===== FORWARD MODE =====
     st.sidebar.subheader("Query Entity Type")
@@ -1237,14 +1250,6 @@ def _run_with_timeout(func, timeout: float, *args, **kwargs):
 # ---------------------------------------------------------------------------
 # Cached analysis runners
 # ---------------------------------------------------------------------------
-
-@st.cache_data(show_spinner="Resolving disease targets...")
-def _resolve_disease(disease: str, min_score: float, max_targets: int) -> dict | None:
-    """Disease name/id → seed Ensembl protein IDs (CTD / Open Targets)."""
-    from jnuherb.analysis import resolve_disease_to_targets
-    return resolve_disease_to_targets(disease, min_score=min_score,
-                                      max_targets=max_targets)
-
 
 @st.cache_data(show_spinner="Running reverse analysis...")
 def _run_reverse(
