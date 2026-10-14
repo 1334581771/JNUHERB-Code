@@ -12,6 +12,7 @@ import pytest
 
 import jnuherb.query as query
 from jnuherb.analysis import resolve_disease_to_targets
+from jnuherb.chat import translate_disease_name
 
 
 @pytest.fixture()
@@ -115,3 +116,73 @@ class TestResolveDiseaseToTargets:
     def test_ctd_inference_row_resolves(self, links_table):
         r = resolve_disease_to_targets("Alzheimer Disease", min_score=0.0)
         assert r["targets"] == ["ENSP00000344456"]
+
+    def test_english_query_never_calls_translator(self, links_table,
+                                                  monkeypatch):
+        """English misses must NOT hit the LLM — only CJK queries do."""
+        def _boom(text):  # pragma: no cover - must not be called
+            raise AssertionError("translator called for English query")
+
+        monkeypatch.setattr("jnuherb.chat.translate_disease_name", _boom)
+        r = resolve_disease_to_targets("no such disease here")
+        assert r["targets"] == []
+        assert r["translated_from"] is None
+
+    def test_chinese_query_translates_then_resolves(self, links_table,
+                                                    monkeypatch):
+        monkeypatch.setattr("jnuherb.chat.translate_disease_name",
+                            lambda text: "Alzheimer Disease")
+        r = resolve_disease_to_targets("阿尔茨海默病", min_score=0.0)
+        assert r["targets"] == ["ENSP00000344456"]
+        assert r["disease_name"] == "Alzheimer Disease"
+        assert r["translated_from"] == "阿尔茨海默病"
+
+    def test_chinese_query_translation_failure_is_silent(self, links_table,
+                                                         monkeypatch):
+        monkeypatch.setattr("jnuherb.chat.translate_disease_name",
+                            lambda text: None)
+        r = resolve_disease_to_targets("某种不存在的病")
+        assert r["targets"] == [] and r["n_total"] == 0
+        assert r["translated_from"] is None
+
+    def test_chinese_query_translation_without_match(self, links_table,
+                                                     monkeypatch):
+        """A translation that matches nothing yields empty, not an error."""
+        monkeypatch.setattr("jnuherb.chat.translate_disease_name",
+                            lambda text: "zzzzz")
+        r = resolve_disease_to_targets("某种不存在的病")
+        assert r["targets"] == []
+        assert r["translated_from"] is None
+
+
+class TestTranslateDiseaseName:
+    def test_no_cjk_returns_none_without_api(self, monkeypatch):
+        def _boom(*a, **kw):  # pragma: no cover - must not be called
+            raise AssertionError("API called for non-Chinese input")
+
+        monkeypatch.setattr("jnuherb.chat._resolve_api_key", _boom)
+        assert translate_disease_name("hypertension") is None
+
+    def test_translates_and_strips_punctuation(self, monkeypatch):
+        monkeypatch.setattr("jnuherb.chat._resolve_api_key",
+                            lambda key: "fake")
+        monkeypatch.setattr("jnuherb.chat._call_deepseek",
+                            lambda *a, **kw: "Hypertension。")
+        assert translate_disease_name("高血压") == "Hypertension"
+
+    def test_unknown_input_returns_none(self, monkeypatch):
+        monkeypatch.setattr("jnuherb.chat._resolve_api_key",
+                            lambda key: "fake")
+        monkeypatch.setattr("jnuherb.chat._call_deepseek",
+                            lambda *a, **kw: "UNKNOWN")
+        assert translate_disease_name("今天天气不错") is None
+
+    def test_api_failure_returns_none(self, monkeypatch):
+        monkeypatch.setattr("jnuherb.chat._resolve_api_key",
+                            lambda key: "fake")
+
+        def _raise(*a, **kw):
+            raise RuntimeError("network down")
+
+        monkeypatch.setattr("jnuherb.chat._call_deepseek", _raise)
+        assert translate_disease_name("高血压") is None

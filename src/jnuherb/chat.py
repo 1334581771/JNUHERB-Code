@@ -1478,6 +1478,60 @@ def _call_deepseek(
         )
 
 
+_CJK_RE = re.compile(r"[一-鿿]")
+
+
+_DISEASE_TRANSLATE_PROMPT = (
+    "You are a medical terminology translator for a biomedical database "
+    "lookup. Translate the user's Chinese disease name into its standard "
+    "English medical term as used in the MONDO, EFO, MeSH, or Orphanet "
+    "disease vocabularies. Reply with ONLY the English disease term — no "
+    "explanation, no alternatives, no punctuation. If the input is not a "
+    "disease name, reply with exactly: UNKNOWN"
+)
+
+
+def translate_disease_name(
+    text: str,
+    api_key: Optional[str] = None,
+    model: str = DEEPSEEK_MODEL,
+    timeout: int = 20,
+) -> Optional[str]:
+    """Translate a Chinese disease name to its standard English term.
+
+    Used by the Reverse-mode disease lookup: the protein–disease link
+    table only carries MONDO/EFO/MeSH/Orphanet English vocabulary, so a
+    Chinese query (e.g. 高血压) is translated first (e.g. Hypertension)
+    and the English term is what actually gets looked up.
+
+    Args:
+        text: User-entered disease query.
+        api_key: DeepSeek API key (falls back to env / Streamlit secrets).
+        model: DeepSeek model id.
+        timeout: HTTP timeout in seconds (lookup box needs snappy UX).
+
+    Returns:
+        The English disease term, or None when the input contains no
+        CJK characters, the translation fails, or the model reports the
+        input is not a disease name. Never raises on API errors — a
+        failed translation just means "no Chinese fallback".
+    """
+    if not _CJK_RE.search(text):
+        return None
+    try:
+        key = _resolve_api_key(api_key)
+        raw = _call_deepseek(
+            key, model, _DISEASE_TRANSLATE_PROMPT, text.strip(),
+            timeout=timeout, max_tokens=30,
+        )
+    except Exception:
+        return None
+    term = raw.strip().splitlines()[0].strip().strip("\"'。.，,;；")
+    if not term or term.upper() == "UNKNOWN":
+        return None
+    return term
+
+
 def _normalize_bilingual(parsed: dict[str, Any]) -> dict[str, Any]:
     """Ensure legacy/single-language responses are upgraded to bilingual format.
 

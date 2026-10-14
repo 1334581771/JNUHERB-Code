@@ -1047,10 +1047,12 @@ else:
     # takes precedence over the manual protein list below.
     reverse_disease = st.sidebar.text_input(
         "Disease name (CTD / Open Targets lookup)",
-        placeholder="e.g. lung cancer · diabetes · EFO:0000180",
+        placeholder="e.g. lung cancer · diabetes · 高血压",
         key="reverse_disease",
-        help="Type a disease name or ID (MONDO:/EFO:/Orphanet:/MESH:); "
-             "its top associated targets become the seed proteins.",
+        help="Type a disease name (English or 中文) or ID "
+             "(MONDO:/EFO:/Orphanet:/MESH:); its top associated targets "
+             "become the seed proteins. Chinese names are translated "
+             "automatically.",
     )
     if reverse_disease.strip():
         _d_col1, _d_col2 = st.sidebar.columns(2)
@@ -1072,8 +1074,12 @@ else:
             _resolved = None
             st.sidebar.warning(f"Disease lookup unavailable: {e}")
         if _resolved and _resolved["targets"]:
+            _tr = ""
+            if _resolved.get("translated_from"):
+                _tr = (f"🔄 {_resolved['translated_from']} → "
+                       f"{_resolved['disease_name']} · ")
             st.sidebar.caption(
-                f"✅ {_resolved['disease_name']} "
+                f"{_tr}✅ {_resolved['disease_name']} "
                 f"({_resolved['disease_id']}) → {len(_resolved['targets'])} "
                 f"seed targets "
                 f"(of {_resolved['n_total']} associated; "
@@ -1636,9 +1642,14 @@ if run_btn:
 
                 if resolved and resolved["targets"]:
                     proteins = list(resolved["targets"])
+                    _tr_note = ""
+                    if resolved.get("translated_from"):
+                        _tr_note = (f"(translated from "
+                                    f"**{resolved['translated_from']}**) ")
                     st.info(
                         f"🎯 Disease **{resolved['disease_name']}** "
-                        f"({resolved['disease_id']}) → seeding Reverse with "
+                        f"({resolved['disease_id']}) {_tr_note}"
+                        f"→ seeding Reverse with "
                         f"{len(proteins)} targets "
                         f"(of {resolved['n_total']} associated; score ≥ "
                         f"{resolved['min_score']})"

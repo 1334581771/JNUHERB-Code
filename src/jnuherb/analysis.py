@@ -4,12 +4,16 @@ This module provides the three central analysis workflows:
 
 * ``from_tcm_or_formula`` — **forward** analysis: TCM/formula → chemicals → proteins.
 * ``from_proteins`` — **reverse** analysis: proteins → chemicals → TCMs → formulas.
+* ``resolve_disease_to_targets`` — disease lookup that seeds Reverse mode,
+  with LLM translation for Chinese disease names (the link table only
+  carries English MONDO/EFO/MeSH/Orphanet vocabulary).
 * ``dfs_filter`` — depth-first search filter that keeps only nodes with
   complete pathways through the network.
 """
 
 from __future__ import annotations
 
+import re
 from typing import Any, Optional
 
 import pandas as pd
@@ -25,12 +29,15 @@ from jnuherb.query import (
     get_tcm_chem_links,
 )
 
+_CJK_RE = re.compile(r"[一-鿿]")
+
 
 def resolve_disease_to_targets(
     disease: str,
     min_score: float = 0.1,
     max_targets: int = 200,
     sources: Optional[list[str]] = None,
+    translate: bool = True,
 ) -> dict[str, Any]:
     """Resolve a disease name/id to seed target proteins for Reverse mode.
 
@@ -38,15 +45,49 @@ def resolve_disease_to_targets(
     Targets), ranks associated proteins by evidence score and returns the
     top Ensembl IDs, ready to feed :func:`from_proteins`.
 
+    The link table only carries English vocabulary (MONDO/EFO/Orphanet
+    from OT, MeSH from CTD).  When a query contains Chinese characters
+    and matches nothing directly, it is translated through the LLM
+    (``jnuherb.chat.translate_disease_name``) and the English term is
+    looked up instead.  Translation is best-effort: any API failure just
+    yields the normal "unknown disease" result.
+
+    Args:
+        disease: Disease name (English, case-insensitive) or prefixed id
+            (``EFO:0000180``, ``MONDO:0008903``, ``MESH:D006973``), or a
+            Chinese disease name when ``translate`` is enabled.
+        min_score: Evidence score floor; CTD curated rows (empty score)
+            always pass.
+        max_targets: Cap on the returned seed target list.
+        sources: Restrict to link sources (e.g. ``["OT", "CTD"]``).
+        translate: Allow the LLM Chinese→English fallback.
+
     Returns:
-        ``{"disease_id", "disease_name", "targets": [...], "n_total",
-        "min_score"}`` — ``targets`` is empty when the disease is unknown.
+        ``{"disease_id", "disease_name", "targets", "n_total",
+        "min_score", "top_genes", "translated_from"}`` — ``targets`` is
+        empty when the disease is unknown; ``translated_from`` is the
+        original Chinese query when a translation was used, else None.
     """
     links = get_protein_disease_links(by_disease=disease, min_score=min_score,
                                       sources=sources)
+    translated_from: Optional[str] = None
+    if links.empty and translate and _CJK_RE.search(disease):
+        # Lazy import: keeps chat.py (and its LLM deps) out of the
+        # import graph unless a Chinese query actually needs it.
+        from jnuherb.chat import translate_disease_name
+
+        en = translate_disease_name(disease)
+        if en:
+            tlinks = get_protein_disease_links(
+                by_disease=en, min_score=min_score, sources=sources)
+            if not tlinks.empty:
+                links = tlinks
+                translated_from = disease
+
     out: dict[str, Any] = {
         "disease_id": "", "disease_name": disease,
         "targets": [], "n_total": 0, "min_score": min_score,
+        "top_genes": [], "translated_from": translated_from,
     }
     if links.empty:
         return out
