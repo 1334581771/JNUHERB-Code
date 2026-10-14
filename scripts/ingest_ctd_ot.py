@@ -471,11 +471,21 @@ def filter_measurement_terms() -> None:
 
 
 def gen_gmt(top_n: int = 500) -> None:
-    """ disease_ctdot.gmt: top-N scored genes per disease, gene symbols."""
+    """ disease_ctdot.gmt: top-N scored genes per disease, gene symbols.
+
+    Genes are TAB-separated on each line: the GMT convention (MSigDB
+    format) that gseapy actually parses — a single space-separated field
+    is read as ONE gene name and enrichment silently finds no overlap.
+    """
     import pandas as pd
-    if not LINKS_CSV.exists():
-        sys.exit(f"missing {LINKS_CSV} — run stage 1 first")
-    df = pd.read_csv(LINKS_CSV, dtype=str, keep_default_na=False)
+    src = LINKS_CSV
+    if not src.exists():
+        # working copy was cleaned up after apply; regenerate from the
+        # packaged (gzip-compressed) table instead
+        src = DATA / "jnuherb_protein_disease_links.csv.gz"
+    if not src.exists():
+        sys.exit(f"missing {LINKS_CSV} (and packaged fallback) — run stage 1 first")
+    df = pd.read_csv(src, dtype=str, keep_default_na=False)
     df["score_num"] = pd.to_numeric(df["score"], errors="coerce").fillna(0.5)
     # OT rows have no disease_name yet → fall back to disease_id for the term
     df["term"] = df["disease_name"].where(df["disease_name"] != "",
@@ -488,7 +498,7 @@ def gen_gmt(top_n: int = 500) -> None:
             genes = [g for g in dict.fromkeys(genes) if g]
             if len(genes) < 5:          # tiny sets enrich noisily
                 continue
-            out.write(f"{term} ({did})\t{did}\t{' '.join(genes)}\n")
+            out.write(f"{term} ({did})\t{did}\t{'\t'.join(genes)}\n")
             n_terms += 1
     print(f"wrote {GMT_OUT}: {n_terms} disease terms (top {top_n} genes each)")
 

@@ -53,7 +53,10 @@ def _tidy_enr_result(
     Sorts by raw ``P-value`` and computes Count, GeneRatio,
     ``-log10(P)`` and ``-log10(Adj P)``. Adds a ``Category`` column.
     """
-    if df is None or df.empty:
+    # gseapy returns a plain list (not a DataFrame) when no gene set has
+    # any overlap with the input — treat that as "no enrichment" instead
+    # of crashing on ``df.empty``.
+    if not isinstance(df, pd.DataFrame) or df.empty:
         return pd.DataFrame()
 
     out = df.copy()
