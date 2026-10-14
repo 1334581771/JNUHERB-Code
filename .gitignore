@@ -20,3 +20,6 @@ src/jnuherb/data/jnuherb.db.tmp
 # is bundled with the package.
 data_ingest/raw/
 data_ingest/jnuherb_protein_disease_links.csv
+*.bak
+data_ingest/*.pre_*.bak
+data_ingest/*.backup.json
