@@ -1808,12 +1808,14 @@ with tabs[0]:
           <div class="jnu-hero-sub">
             JNUHERB is an integrated web server for traditional Chinese medicine
             research, unifying AI-assisted syndrome differentiation, bidirectional
-            (forward and reverse) network pharmacology, TCM compatibility
-            optimization, and molecular-docking-based virtual screening in a
-            single platform.
+            (forward and reverse) network pharmacology, disease-anchored target
+            discovery powered by CTD / Open Targets associations, TCM
+            compatibility optimization, and molecular-docking-based virtual
+            screening in a single platform.
           </div>
           <div class="jnu-hero-stats">
             <span class="jnu-stat"><b>2,000+</b> syndromes</span>
+            <span class="jnu-stat"><b>24,200+</b> diseases</span>
             <span class="jnu-stat"><b>12,500+</b> formulas</span>
             <span class="jnu-stat"><b>4,700+</b> herbs</span>
             <span class="jnu-stat"><b>13,100+</b> chemicals</span>
