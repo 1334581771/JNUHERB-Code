@@ -66,6 +66,13 @@ def _tidy_enr_result(
     out["-log10(P)"] = -np.log10(out["P-value"].astype(float).apply(lambda x: max(x, 1e-300)))
     out["-log10(Adj P)"] = -np.log10(out["Adjusted P-value"].astype(float).apply(lambda x: max(x, 1e-300)))
     out["Category"] = category
+    # Disease terms carry their prefixed id in the GMT name ("name
+    # (MONDO:0002492)"); the id is already in the description column,
+    # so strip it here for display and sentence-case the name.
+    if category == "Disease" and "Term" in out.columns:
+        out["Term"] = out["Term"].str.replace(
+            r"\s*\([A-Za-z]+:[A-Za-z0-9]+\)$", "", regex=True)
+        out["Term"] = out["Term"].str[:1].str.upper() + out["Term"].str[1:]
     # Sort by raw P-value
     out = out.sort_values("P-value")
     return out.reset_index(drop=True)
