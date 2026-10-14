@@ -226,6 +226,91 @@ _SYMPTOM_TRANSLATIONS = {
 }
 
 # ---------------------------------------------------------------------------
+# Syndrome tokenization (zang-fu / pathogenesis / treatment-method tokens)
+# ---------------------------------------------------------------------------
+_ZANGFU_TOKENS = [
+    "心包", "膀胱", "三焦", "小肠", "大肠",
+    "心", "肝", "脾", "肺", "肾", "胃", "胆",
+    "上焦", "中焦", "下焦",
+    "太阳", "阳明", "少阳", "太阴", "少阴", "厥阴",
+    "卫分", "气分", "营分", "血分", "半表半里",
+]
+_BINGJI_TOKENS = [
+    "气血两虚", "气血亏虚", "气虚", "血虚", "阴虚", "阳虚", "津亏", "气陷",
+    "气滞", "气郁", "血瘀", "血热", "血寒", "出血",
+    "痰湿", "痰热", "痰饮", "湿热", "寒湿", "风寒", "风热", "风湿",
+    "火热", "实热", "虚热", "虚火", "食积", "水饮", "水肿",
+    "阳亢", "肝风", "内风", "腑实", "积滞",
+]
+_DEFICIENCY_TOKENS = ("气虚", "血虚", "阴虚", "阳虚", "气血两虚", "气血亏虚", "津亏")
+_TREATMENT_TOKENS = [
+    "益气", "补气", "健脾", "补脾", "养血", "补血", "滋阴", "养阴",
+    "温阳", "助阳", "壮阳", "回阳", "清热", "泻火", "解毒", "化痰",
+    "祛痰", "燥湿", "利湿", "利水", "化湿", "祛湿", "活血", "化瘀",
+    "疏肝", "理气", "解郁", "解表", "发汗", "温里", "散寒", "消食",
+    "导滞", "安神", "镇惊", "息风", "开窍", "固涩", "收敛", "祛风湿",
+    "通络", "补虚", "和胃", "降逆", "润肠",
+]
+
+
+def _extract_syndrome_tokens(syndrome_zh: str) -> tuple[list[str], list[str]]:
+    """Split a TCM syndrome name into zang-fu organ and pathogenesis tokens.
+
+    Returns ``(zangfu_tokens, bingji_tokens)``. When the syndrome carries a
+    bare "虚" without a specific deficiency qualifier, a weak "虚" token is
+    added so compatibility checks can bridge it to specific deficiencies.
+    """
+    if not syndrome_zh:
+        return [], []
+    zangfu = [t for t in _ZANGFU_TOKENS if t in syndrome_zh]
+    bingji = [t for t in _BINGJI_TOKENS if t in syndrome_zh]
+    if not bingji and "虚" in syndrome_zh:
+        bingji = ["虚"]
+    return zangfu, bingji
+
+
+def _syndrome_compatibility(syndrome_zh: str, pattern_zh: str) -> tuple[str, list[str]]:
+    """Classify how compatible a formula's typical pattern is with a syndrome.
+
+    Returns ``(tier, shared_tokens)`` where tier is one of:
+
+    - ``"full"``     – exact or parent/child pattern match (✅)
+    - ``"partial"``  – shared zang-fu / pathogenesis tokens; usable as a
+                       base formula with modifications (🟡)
+    - ``"mismatch"`` – no meaningful overlap (🔴)
+    - ``"unusable"`` – the profile's pattern field is an effect description
+                       (e.g. 气血双补) rather than a syndrome name, so it
+                       cannot be auto-validated (ℹ️)
+    """
+    if not pattern_zh:
+        return "unusable", []
+    # GB/T 16751.2 canonicalization: official synonyms and curated clinical
+    # aliases resolve to the same standard term before any comparison.
+    syndrome_zh = canonical_syndrome(syndrome_zh)
+    pattern_zh = canonical_syndrome(pattern_zh)
+    if pattern_zh in syndrome_zh or syndrome_zh in pattern_zh:
+        return "full", []
+    s_zf, s_bj = _extract_syndrome_tokens(syndrome_zh)
+    p_zf, p_bj = _extract_syndrome_tokens(pattern_zh)
+    if not p_zf and not p_bj:
+        return "unusable", []
+    shared_zf = [t for t in s_zf if t in p_zf]
+    shared_bj = [t for t in s_bj if t in p_bj]
+    score = 3 * len(shared_zf) + 4 * len(shared_bj)
+    # Deficiency bridge: a bare "虚" on one side vs a specific deficiency
+    # (气虚/血虚/...) on the other counts as weak partial overlap.  This is
+    # what lets 四君子汤 (脾胃气虚证) pass as a 🟡 partial match for
+    # 心脾两虚证 instead of a hard mismatch.
+    if not shared_bj and "虚" in s_bj:
+        if "虚" in p_bj or any(t in p_bj for t in _DEFICIENCY_TOKENS):
+            score += 2
+            shared_bj = ["虚"]
+    if score >= 4:
+        return "partial", shared_zf + shared_bj
+    return "mismatch", []
+
+
+# ---------------------------------------------------------------------------
 # System prompt for TCM syndrome differentiation
 # ---------------------------------------------------------------------------
 SYSTEM_PROMPT_TEMPLATE = """你是一位经验丰富的中医专家，同时具备用英文向国际读者解释中医概念的能力。用户会描述疾病症状，请你进行中医辨证分析并给出用药建议。
@@ -277,6 +362,58 @@ SYSTEM_PROMPT_TEMPLATE = """你是一位经验丰富的中医专家，同时具�
 # Classic formula syndrome-differentiation profiles
 # ---------------------------------------------------------------------------
 _PROFILES_CACHE: Optional[dict[str, Any]] = None
+_GBT_CACHE: Optional[dict[str, Any]] = None
+
+
+def _load_gbt_syndromes() -> dict[str, Any]:
+    """Load the GB/T 16751.2-2021 syndrome terminology bundle.
+
+    Returns a dict with ``standard_terms`` (set), ``alias_to_standard`` and
+    ``clinical_alias_to_standard`` (official synonyms and curated mappings
+    of common clinical variants respectively).  Empty/missing fields are
+    tolerated so the module works with older data bundles.
+    """
+    global _GBT_CACHE
+    if _GBT_CACHE is not None:
+        return _GBT_CACHE
+
+    data: dict[str, Any] = {
+        "standard_set": set(),
+        "alias_to_standard": {},
+        "clinical_alias_to_standard": {},
+    }
+    try:
+        from importlib.resources import files
+
+        path = files("jnuherb.data").joinpath("gbt16751_syndromes.json")
+        with open(str(path), "r", encoding="utf-8") as f:
+            raw = json.load(f)
+        data["standard_set"] = set(raw.get("standard_terms", []))
+        data["alias_to_standard"] = raw.get("alias_to_standard", {})
+        data["clinical_alias_to_standard"] = raw.get("clinical_alias_to_standard", {})
+    except Exception:
+        pass
+
+    _GBT_CACHE = data
+    return data
+
+
+def canonical_syndrome(name: str) -> str:
+    """Map a syndrome name to its GB/T 16751.2 standard term when known.
+
+    Resolution order: official standard term → official synonym → curated
+    clinical-alias mapping.  Unknown names are returned unchanged.
+    """
+    name = (name or "").strip()
+    if not name:
+        return name
+    gbt = _load_gbt_syndromes()
+    if name in gbt["standard_set"]:
+        return name
+    mapped = gbt["alias_to_standard"].get(name)
+    if mapped:
+        return mapped
+    return gbt["clinical_alias_to_standard"].get(name, name)
 
 
 def _load_syndrome_profiles() -> dict[str, Any]:
@@ -372,6 +509,201 @@ def build_system_prompt(candidates: dict[str, Any]) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Stage 1: syndrome differentiation prompt
+# ---------------------------------------------------------------------------
+_STAGE1_PROMPT = """你是一位经验丰富的中医专家。用户会描述患者的疾病症状，请你完成第一阶段的辨证分析。本阶段只辨证、不推荐任何草药或方剂。
+
+请严格按以下 JSON 格式回复（不要包含其他文字）：
+{
+  "syndrome": {"zh": "标准中医证型名（如：心脾两虚证、风寒束表证）", "en": "English syndrome name"},
+  "ba_gang": {"zh": "八纲归纳（如：阴证，里证，虚证，偏寒）", "en": ""},
+  "zang_fu": {"zh": "病变脏腑与气血状态（如：心脾两虚，气血不足）", "en": ""},
+  "pathogenesis": {"zh": "100字以内病机分析", "en": "Brief English pathogenesis"},
+  "treatment_principle": {"zh": "治法，使用规范术语（如：益气健脾，养血安神）", "en": "English treatment principle"},
+  "key_symptoms": {"zh": ["支持该证型的关键症状1", "关键症状2", "关键症状3"], "en": []}
+}
+
+辨证要求：
+1. 先辨八纲（阴阳、表里、寒热、虚实），再定脏腑气血定位；
+2. 证型名必须规范、完整（如 心脾两虚证、脾胃气虚证、肝郁气滞证、肾阴虚证）；
+3. 治法用规范术语，以四字结构为主（益气健脾/养血安神/清热化痰/疏肝解郁 等）；
+4. 本阶段只输出辨证结论，不要推荐方药。"""
+
+
+def _bilingual_field(parsed: dict[str, Any], key: str) -> dict[str, str]:
+    """Normalize a possibly-missing field to a {'zh': ..., 'en': ...} dict."""
+    val = parsed.get(key, "")
+    if isinstance(val, dict):
+        return {"zh": str(val.get("zh", "")), "en": str(val.get("en", ""))}
+    if isinstance(val, str):
+        return {"zh": val, "en": ""}
+    return {"zh": "", "en": ""}
+
+
+def infer_syndrome(
+    symptoms: str,
+    api_key: Optional[str] = None,
+    model: str = DEEPSEEK_MODEL,
+    extra_context: str = "",
+) -> dict[str, Any]:
+    """Stage-1 LLM call: differentiate the syndrome without recommending formulas.
+
+    Returns a dict with bilingual ``syndrome``, ``ba_gang``, ``zang_fu``,
+    ``pathogenesis``, ``treatment_principle`` and a Chinese
+    ``key_symptoms`` list.
+    """
+    api_key = _resolve_api_key(api_key)
+
+    user_message = f"患者症状描述：{symptoms}"
+    if extra_context:
+        user_message += f"\n\n补充信息：{extra_context}"
+
+    raw = _call_deepseek(api_key, model, _STAGE1_PROMPT, user_message)
+    parsed = _parse_response(raw)
+
+    key_symptoms = parsed.get("key_symptoms", {})
+    if isinstance(key_symptoms, dict):
+        key_symptoms_zh = key_symptoms.get("zh", []) or []
+    elif isinstance(key_symptoms, list):
+        key_symptoms_zh = key_symptoms
+    else:
+        key_symptoms_zh = []
+
+    return {
+        "syndrome": _bilingual_field(parsed, "syndrome"),
+        "ba_gang": _bilingual_field(parsed, "ba_gang"),
+        "zang_fu": _bilingual_field(parsed, "zang_fu"),
+        "pathogenesis": _bilingual_field(parsed, "pathogenesis"),
+        "treatment_principle": _bilingual_field(parsed, "treatment_principle"),
+        "key_symptoms": [str(s) for s in key_symptoms_zh],
+        "raw_response": raw,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Stage 2: syndrome-driven full-database formula scoring
+# ---------------------------------------------------------------------------
+def _score_formulas_by_syndrome(
+    syndrome_zh: str,
+    treatment_zh: str = "",
+    top_k: int = 10,
+) -> list[dict[str, Any]]:
+    """Traverse ALL formulas in the database and score them against an
+    inferred syndrome pattern (以证索方).
+
+    Scoring per formula:
+      1. Exact profile-pattern match with the syndrome      → +12
+      2. Zang-fu organ token overlap (心/脾/肾/...)          → +3 each
+      3. Pathogenesis token overlap (气虚/阴虚/湿热/...)     → +4 each
+      4. Treatment-method token overlap with the formula's
+         function/instruction text (益气/健脾/养血/...)      → +2 each
+
+    Unlike keyword retrieval this channel sees the whole table, so a formula
+    whose wording differs from the patient's description can still surface
+    when its recorded syndrome matches the differentiation result.
+    """
+    from jnuherb._data import _load_table
+
+    if not syndrome_zh:
+        return []
+
+    syndrome_zh = canonical_syndrome(syndrome_zh)
+    zangfu, bingji = _extract_syndrome_tokens(syndrome_zh)
+    treat_tokens = [
+        t for t in _TREATMENT_TOKENS
+        if t in treatment_zh or t in syndrome_zh
+    ]
+    if not (zangfu or bingji) and not treat_tokens:
+        return []
+
+    profiles = _load_syndrome_profiles()
+    fml_df = _load_table("jnuherb_formula")
+    if fml_df is None or fml_df.empty:
+        return []
+
+    syn_cols = [c for c in ("Syndromes_zh", "Syndromes_en") if c in fml_df.columns]
+    func_cols = [
+        c for c in ("name", "Instructions", "Treatment Symptoms", "Formula_category")
+        if c in fml_df.columns
+    ]
+    syn_text = (
+        fml_df[syn_cols].fillna("").astype(str).agg(" ".join, axis=1)
+        if syn_cols else pd.Series([""] * len(fml_df), index=fml_df.index)
+    )
+    func_text = (
+        fml_df[func_cols].fillna("").astype(str).agg(" ".join, axis=1)
+        if func_cols else pd.Series([""] * len(fml_df), index=fml_df.index)
+    )
+
+    scored: list[dict[str, Any]] = []
+    for idx in fml_df.index:
+        name = str(fml_df.at[idx, "name"]) if "name" in fml_df.columns else ""
+        profile = profiles.get(name, {}) if name else {}
+        pattern_zh = profile.get("syndrome_pattern_zh", "")
+        pattern_en = profile.get("syndrome_pattern_en", "")
+        haystack = f"{syn_text.at[idx]} {pattern_zh} {pattern_en}"
+
+        score = 0
+        hits: list[str] = []
+        if pattern_zh and (pattern_zh in syndrome_zh or syndrome_zh in pattern_zh):
+            score += 12
+            hits.append(f"证型全匹配:{pattern_zh}")
+        else:
+            for t in zangfu:
+                if t in haystack:
+                    score += 3
+                    hits.append(f"脏腑:{t}")
+            for t in bingji:
+                if t != "虚" and t in haystack:
+                    score += 4
+                    hits.append(f"病机:{t}")
+        for t in treat_tokens:
+            if t in func_text.at[idx]:
+                score += 2
+                hits.append(f"治法:{t}")
+
+        if score == 0:
+            continue
+        rec = fml_df.loc[idx].to_dict()
+        rec["match_score"] = score
+        rec["match_source"] = "syndrome"
+        rec["_match_detail"] = hits
+        scored.append(rec)
+
+    # Classic-formula fallback: if a profiled classic formula's pattern
+    # exactly matches the inferred syndrome but the formula itself is not in
+    # the database, inject a synthetic record (flagged for the UI) so the
+    # LLM can still consider the canonical prescription.
+    by_name = {r.get("name", ""): r for r in scored}
+    for name, profile in profiles.items():
+        pattern_zh = profile.get("syndrome_pattern_zh", "")
+        if not pattern_zh:
+            continue
+        if not (pattern_zh in syndrome_zh or syndrome_zh in pattern_zh):
+            continue
+        if name in by_name:
+            continue
+        db_record = _find_formula_in_db(name, profile.get("hvpid") or None)
+        if db_record is None:
+            db_record = {
+                "HVPID": profile.get("hvpid") or "UNKNOWN",
+                "name": name,
+                "Prescription Composition": "",
+                "Instructions": "",
+                "Treatment Symptoms": "",
+                "Source Document": profile.get("source_classic", ""),
+                "_synthetic": True,
+            }
+        db_record["match_score"] = 12
+        db_record["match_source"] = "syndrome"
+        db_record["_match_detail"] = [f"证型全匹配:{pattern_zh}"]
+        scored.append(db_record)
+
+    scored.sort(key=lambda r: r.get("match_score", 0), reverse=True)
+    return scored[:top_k]
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -386,10 +718,18 @@ def consult(
 ) -> dict[str, Any]:
     """Consult the DeepSeek AI for TCM syndrome analysis and recommendations.
 
-    Recommendations are grounded in the jnuherb database: before calling the
-    LLM, the function retrieves candidate herbs and formulas whose symptom/
-    function fields overlap with the user's description, and the model is
-    instructed to recommend only from these candidates.
+    Two-stage pipeline (two LLM API calls per consultation):
+
+    1. **辨证 (differentiation)** – the model infers the TCM syndrome,
+       zang-fu localization and treatment principle from the symptoms alone.
+    2. **选方 (formula selection)** – formulas are retrieved by traversing
+       the whole database against the inferred syndrome (以证索方) and
+       merging with symptom-keyword candidates; the model then picks the
+       final herbs/formulas only from this syndrome-grounded candidate
+       list, anchored to the stage-1 differentiation result.
+
+    Recommendations are therefore grounded in the jnuherb database while
+    staying consistent with the inferred syndrome pattern.
 
     Args:
         symptoms: Patient symptom description (Chinese or English).
@@ -413,23 +753,69 @@ def consult(
     """
     api_key = _resolve_api_key(api_key)
 
-    # Retrieve database candidates grounded in the user's symptoms
+    # ------------------------------------------------------------------
+    # Stage 1: syndrome differentiation (no formula constraint yet)
+    # ------------------------------------------------------------------
+    stage1 = infer_syndrome(
+        symptoms, api_key=api_key, model=model, extra_context=extra_context
+    )
+
+    # ------------------------------------------------------------------
+    # Stage 2a: retrieve candidates. Herbs come from symptom keywords;
+    # formulas are re-ranked by traversing the WHOLE database against the
+    # inferred syndrome (以证索方), then merged with the keyword channel.
+    # ------------------------------------------------------------------
     candidates = retrieve_candidates(
         symptoms,
         top_k_herbs=top_k_herbs,
         top_k_formulas=top_k_formulas,
     )
+    syndrome_zh = stage1["syndrome"]["zh"]
+    treatment_zh = stage1["treatment_principle"]["zh"]
+    syndrome_formulas = _score_formulas_by_syndrome(
+        syndrome_zh, treatment_zh, top_k=top_k_formulas
+    )
+    candidates["formulas"] = _merge_formula_scores(
+        candidates["formulas"], syndrome_formulas
+    )[:top_k_formulas]
+
     rag_context = _build_rag_context(candidates)
 
-    user_message = f"用户症状描述：{symptoms}\n\n{rag_context}"
+    # ------------------------------------------------------------------
+    # Stage 2b: final LLM call — pick formulas from the syndrome-matched
+    # candidates, grounded in the confirmed stage-1 differentiation.
+    # ------------------------------------------------------------------
+    stage1_block = (
+        "=== 第一阶段辨证结论（已经确定，请在此基础上有据选方）/ Confirmed stage-1 differentiation ===\n"
+        f"证型 Syndrome：{syndrome_zh} / {stage1['syndrome']['en']}\n"
+        f"八纲：{stage1['ba_gang']['zh']}\n"
+        f"脏腑气血：{stage1['zang_fu']['zh']}\n"
+        f"病机：{stage1['pathogenesis']['zh']}\n"
+        f"治法 Treatment principle：{treatment_zh} / {stage1['treatment_principle']['en']}\n\n"
+        "选方要求：请优先从下方候选方剂中选择【对应证型与上述证型一致，或脏腑病机相合（可作基础方加减）】者；"
+        "每个候选方剂附带辨证档案/证型字段，请据此核对后再选。"
+        "若候选中确实没有对证方剂，请明确说明，不要勉强推荐证型相悖的方剂。"
+    )
+
+    system_prompt = "\n\n".join([stage1_block, build_system_prompt(candidates)])
+    user_message = f"患者症状描述：{symptoms}\n\n{rag_context}"
     if extra_context:
         user_message += f"\n\n补充信息：{extra_context}"
 
-    response = _call_deepseek(api_key, model, build_system_prompt(candidates), user_message)
+    response = _call_deepseek(api_key, model, system_prompt, user_message)
 
     # Parse JSON from response and normalize to bilingual format
     parsed = _parse_response(response)
     parsed = _normalize_bilingual(parsed)
+
+    # Carry the stage-1 differentiation through so the UI and the validator
+    # stay consistent with the syndrome the formulas were selected against.
+    parsed["syndrome"] = stage1["syndrome"]
+    parsed["ba_gang"] = stage1["ba_gang"]
+    parsed["zang_fu"] = stage1["zang_fu"]
+    parsed["pathogenesis"] = stage1["pathogenesis"]
+    parsed["treatment_principle"] = stage1["treatment_principle"]
+    parsed["stage1"] = stage1
     parsed = validate_recommendation(parsed, candidates)
 
     parsed["raw_response"] = response
@@ -742,12 +1128,16 @@ def validate_recommendation(
     """Post-process and validate AI recommendations against syndrome profiles.
 
     Checks:
-    1. Whether recommended formulas match the inferred syndrome pattern.
+    1. Whether recommended formulas match the inferred syndrome pattern,
+       graded as 高度匹配 (✅) / 部分匹配 (🟡) / 不匹配 (🔴).  Profile
+       entries whose "pattern" is actually an effect description (e.g.
+       气血双补) are reported as 档案待规范 (ℹ️) instead of a mismatch.
     2. Whether any contraindicated pattern appears.
     3. Whether recommended formulas are present in the database.
 
-    Adds keys ``validation_warnings``, ``syndrome_formula_match``,
-    and ``db_coverage`` to the parsed result.
+    Adds keys ``validation_warnings`` (hard problems only),
+    ``validation_notes`` (informational ✅/🟡/ℹ️ messages),
+    ``syndrome_formula_match`` and ``db_coverage``.
     """
     profiles = _load_syndrome_profiles()
 
@@ -756,6 +1146,7 @@ def validate_recommendation(
     formulas_zh = parsed.get("formulas", {}).get("zh", [])
 
     warnings: list[str] = []
+    notes: list[str] = []
     match_results: dict[str, bool] = {}
     db_coverage: dict[str, bool] = {}
 
@@ -774,15 +1165,33 @@ def validate_recommendation(
                 )
             continue
 
-        # Syndrome-pattern consistency (substring match to tolerate variants)
+        # Syndrome-pattern compatibility (graded, tolerates variants)
         pattern_zh = profile.get("syndrome_pattern_zh", "")
         pattern_en = profile.get("syndrome_pattern_en", "")
-        match = bool(pattern_zh and pattern_zh in syndrome_zh)
-        if not match and pattern_en:
-            match = pattern_en.lower() in syndrome_en.lower()
-        match_results[fml_name] = match
+        tier, shared = _syndrome_compatibility(syndrome_zh, pattern_zh)
+        if tier == "mismatch" and pattern_en and syndrome_en:
+            if pattern_en.lower() in syndrome_en.lower():
+                tier, shared = "full", []
+        match_results[fml_name] = tier in ("full", "partial")
 
-        if not match:
+        if tier == "full":
+            notes.append(
+                f"✅ 推荐方剂【{fml_name}】与推断证型【{syndrome_zh}】高度匹配"
+                f"（典型证型：{pattern_zh}）。"
+            )
+        elif tier == "partial":
+            notes.append(
+                f"🟡 推荐方剂【{fml_name}】与推断证型部分匹配："
+                f"该方剂典型证型为【{pattern_zh}】，与【{syndrome_zh}】在"
+                f"【{'、'.join(shared)}】上一致，可作为基础方加减使用，请结合临床复核。"
+            )
+        elif tier == "unusable":
+            notes.append(
+                f"ℹ️ 推荐方剂【{fml_name}】的辨证档案“典型证型”字段为"
+                f"【{pattern_zh}】，疑似功效描述而非规范证型名，无法自动校验，"
+                f"建议人工核对该档案。"
+            )
+        else:
             warnings.append(
                 f"注意：推荐方剂【{fml_name}】与推断证型可能不匹配。"
                 f"该方剂典型对应证型为【{pattern_zh}】，"
@@ -803,6 +1212,7 @@ def validate_recommendation(
             )
 
     parsed["validation_warnings"] = warnings
+    parsed["validation_notes"] = notes
     parsed["syndrome_formula_match"] = match_results
     parsed["db_coverage"] = db_coverage
     return parsed
@@ -911,8 +1321,14 @@ def _call_deepseek(
     system_prompt: str,
     user_message: str,
     timeout: int = 60,
+    max_tokens: int = 8192,
 ) -> str:
-    """Call the DeepSeek chat completions API and return the message text."""
+    """Call the DeepSeek chat completions API and return the message text.
+
+    ``max_tokens`` defaults to 8192 (the deepseek-chat ceiling): the stage-2
+    consultation must emit a long structured differentiation report, and a
+    lower cap truncates the JSON mid-stream, which then fails parsing.
+    """
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
@@ -924,7 +1340,7 @@ def _call_deepseek(
             {"role": "user", "content": user_message},
         ],
         "temperature": 0.3,
-        "max_tokens": 2048,
+        "max_tokens": max_tokens,
     }
 
     try:
@@ -1022,6 +1438,13 @@ def _parse_response(text: str) -> dict[str, Any]:
         except json.JSONDecodeError:
             pass
 
+    hint = ""
+    if not text.rstrip().endswith(("}", "```")):
+        hint = (
+            "\n\n(Hint: the response looks truncated — the consultation "
+            "report may exceed the model's max_tokens limit. If this "
+            "persists, try a shorter symptom description.)"
+        )
     raise RuntimeError(
-        f"Could not parse DeepSeek response as JSON. Raw response:\n{text[:500]}"
+        f"Could not parse DeepSeek response as JSON. Raw response:\n{text[:500]}{hint}"
     )

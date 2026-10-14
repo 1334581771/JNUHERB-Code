@@ -1707,9 +1707,11 @@ with tabs[0]:
         <div class="jnu-hero">
           <div class="jnu-hero-title">🌿 JNUHERB</div>
           <div class="jnu-hero-sub">
-            Network pharmacology of traditional Chinese medicine — bidirectional
-            herb–ingredient–target analysis, AI-assisted syndrome differentiation,
-            TCM compatibility optimization, and molecular docking, in one web server.
+            JNUHERB is an integrated web server for traditional Chinese medicine
+            research, unifying AI-assisted syndrome differentiation, bidirectional
+            (forward and reverse) network pharmacology, TCM compatibility
+            optimization, and molecular-docking-based virtual screening in a
+            single platform.
           </div>
           <div class="jnu-hero-stats">
             <span class="jnu-stat"><b>2,000+</b> syndromes</span>
@@ -1729,23 +1731,27 @@ with tabs[0]:
                herbs and formulas from enriched syndrome and indication data.</p>
             <p><b>When to use:</b> TCM syndrome interpretation and
                evidence-guided prescription discovery.</p>
-            <p><b>Example:</b> <code>edema with oliguria</code> · <code>利水消肿</code></p>
+            <p><b>Example:</b> <code>I have a headache and fever</code> · <code>头痛发热</code></p>
           </div>
           <div class="jnu-card">
-            <h3>🚀 Forward &nbsp;<span class="jnu-card-arrow">TCMs / Formulas → Proteins</span></h3>
-            <p>Start from herbs, formulas or monomer ingredients and map them to
-               protein targets, pathways and dockable structures.</p>
-            <p><b>When to use:</b> mechanism elucidation of a known prescription
-               or ingredient.</p>
-            <p><b>Example:</b> <code>柴胡, 黄芩</code> · <code>HVP1625</code> · <code>berberine</code></p>
+            <h3>🚀 Bidirectional &nbsp;<span class="jnu-card-arrow">TCMs ↔ Proteins</span></h3>
+            <p><b>Forward:</b> start from herbs, formulas or monomer ingredients
+               and map them to protein targets and pathways.
+               <b>Reverse:</b> start from disease targets and discover candidate
+               herbs, formulas and active ingredients.</p>
+            <p><b>When to use:</b> mechanism elucidation, target-driven drug
+               discovery, drug repositioning.</p>
+            <p><b>Example:</b> <code>柴胡, 黄芩</code> · <code>TNF, IL6, TP53</code></p>
           </div>
           <div class="jnu-card">
-            <h3>🎯 Reverse &nbsp;<span class="jnu-card-arrow">Proteins → TCMs</span></h3>
-            <p>Start from disease targets (Ensembl IDs or gene names) and
-               discover candidate herbs, formulas and active ingredients.</p>
-            <p><b>When to use:</b> target-driven drug discovery, drug
-               repositioning, mechanism-guided formula selection.</p>
-            <p><b>Example:</b> <code>TNF, IL6, TP53</code></p>
+            <h3>🧩 Optimization &nbsp;<span class="jnu-card-arrow">Candidates → Formula</span></h3>
+            <p>Combine shortlisted herbs or monomers into an optimized
+               compatible prescription under a capacity budget, ranked by
+               probability-union HerbiV scoring.</p>
+            <p><b>When to use:</b> TCM compatibility design from
+               reverse or forward analysis hits.</p>
+            <p><b>Example:</b> optimize the herbs returned by an AI or
+               reverse query.</p>
           </div>
           <div class="jnu-card">
             <h3>🔬 Virtual Screening &nbsp;<span class="jnu-card-arrow">Ligand → Protein</span></h3>
@@ -1759,8 +1765,9 @@ with tabs[0]:
         </div>
         """, unsafe_allow_html=True)
 
-        st.caption("👈 Start with **🤖 AI** or pick a direction in the sidebar "
-                   "(**🎯 Reverse** / **🚀 Forward**); dock top hits under **🔬 Docking**.")
+        st.caption("👈 Start with **🤖 AI**, or pick a direction in the sidebar "
+                   "(**🎯 Reverse** / **🚀 Forward**); then optimize combinations "
+                   "under **🧩 Optimization** and dock top hits under **🔬 Docking**.")
 
         with st.expander("📖 Detailed guide & more examples"):
             st.markdown("""
@@ -1927,6 +1934,13 @@ with tabs[1]:
             if syndrome_en:
                 st.markdown(f"*{syndrome_en}*")
 
+            treatment = ai.get("treatment_principle", {})
+            if treatment.get("zh"):
+                treatment_en = f" / {treatment['en']}" if treatment.get("en") else ""
+                st.markdown(
+                    f"**治法 / Treatment Principle**：{treatment['zh']}{treatment_en}"
+                )
+
             analysis_zh = ai.get("analysis", {}).get("zh", "")
             analysis_en = ai.get("analysis", {}).get("en", "")
             if analysis_zh or analysis_en:
@@ -1951,6 +1965,9 @@ with tabs[1]:
                 st.markdown("**⚠️ Validation / 辨证校验**")
                 for w in warnings:
                     st.warning(w)
+            notes = ai.get("validation_notes", [])
+            for n in notes:
+                st.info(n)
         with c2:
             if st.button("🔄 New Consultation", key="ai_reset"):
                 st.session_state.consultation = None

@@ -9,12 +9,39 @@ import pytest
 
 from jnuherb.chat import (
     build_system_prompt,
+    canonical_syndrome,
     consult,
     retrieve_candidates,
     validate_recommendation,
     _extract_symptom_keywords,
     _load_syndrome_profiles,
+    _score_formulas_by_syndrome,
+    _syndrome_compatibility,
 )
+
+
+# ---------------------------------------------------------------------------
+# GB/T 16751.2 canonicalization
+# ---------------------------------------------------------------------------
+
+def test_canonical_syndrome_standard_passthrough():
+    assert canonical_syndrome("心脾两虚证") == "心脾两虚证"
+
+
+def test_canonical_syndrome_official_alias():
+    """Official GB/T synonyms resolve to the standard term."""
+    std = canonical_syndrome("里热炽盛证")   # official alias of 里热证
+    assert std == "里热证"
+
+
+def test_canonical_syndrome_unknown_unchanged():
+    assert canonical_syndrome("某某虚构证") == "某某虚构证"
+
+
+def test_compatibility_alias_full_match():
+    """Canonicalized alias vs standard term should count as full match."""
+    tier, _ = _syndrome_compatibility("里热证", "里热炽盛证")
+    assert tier == "full"
 
 
 # ---------------------------------------------------------------------------
@@ -142,6 +169,96 @@ def test_validate_recommendation_synthetic_warning():
     result = validate_recommendation(parsed, candidates)
     assert result["db_coverage"]["萆薢分清饮"] is False
     assert any("不在数据库中" in w for w in result["validation_warnings"])
+
+
+# ---------------------------------------------------------------------------
+# Syndrome-driven formula scoring (stage 2)
+# ---------------------------------------------------------------------------
+
+def test_score_formulas_by_syndrome_si_jun_zi():
+    """以证索方：脾胃气虚证 should surface 四君子汤 via full pattern match."""
+    results = _score_formulas_by_syndrome("脾胃气虚证", "益气健脾", top_k=10)
+    names = [r["name"] for r in results]
+    assert "四君子汤" in names
+    top = next(r for r in results if r["name"] == "四君子汤")
+    assert any("证型全匹配" in h for h in top.get("_match_detail", []))
+
+
+def test_score_formulas_by_syndrome_xiao_chai_hu():
+    """以证索方：少阳证 should surface 小柴胡汤."""
+    results = _score_formulas_by_syndrome("少阳证", "和解少阳", top_k=10)
+    names = [r["name"] for r in results]
+    assert "小柴胡汤" in names
+
+
+def test_score_formulas_by_syndrome_xin_pi_liang_xu():
+    """以证索方：心脾两虚证 should surface spleen/heart-tonifying formulas."""
+    results = _score_formulas_by_syndrome(
+        "心脾两虚证", "益气健脾，养血安神", top_k=10
+    )
+    names = [r["name"] for r in results]
+    # 归脾汤 is the canonical formula for 心脾两虚; even if its profile
+    # pattern field is an effect description, its DB syndrome text or the
+    # organ tokens should bring it (or at least spleen-tonifying formulas)
+    # into the candidate list.
+    assert len(names) > 0
+    assert any(("归脾" in n) or ("脾" in n) for n in names)
+
+
+# ---------------------------------------------------------------------------
+# Syndrome compatibility grading
+# ---------------------------------------------------------------------------
+
+def test_compatibility_full():
+    assert _syndrome_compatibility("少阳证", "少阳证")[0] == "full"
+    # 同义词经 GB/T 归一化后等同（少阳证 → 邪郁少阳证）
+    assert _syndrome_compatibility("邪郁少阳证", "少阳证")[0] == "full"
+    assert _syndrome_compatibility("心脾两虚证", "心脾两虚证")[0] == "full"
+
+
+def test_compatibility_partial_deficiency_bridge():
+    """心脾两虚证 vs 脾胃气虚证 should be partial, not mismatch."""
+    tier, shared = _syndrome_compatibility("心脾两虚证", "脾胃气虚证")
+    assert tier == "partial"
+    assert "脾" in shared
+
+
+def test_compatibility_unusable_effect_description():
+    """Effect descriptions (气血双补) cannot be auto-validated -> unusable."""
+    assert _syndrome_compatibility("心脾两虚证", "气血双补")[0] == "unusable"
+    assert _syndrome_compatibility("心脾两虚证", "补血")[0] == "unusable"
+
+
+def test_compatibility_mismatch():
+    tier, _ = _syndrome_compatibility("肾阴虚证", "少阳证")
+    assert tier == "mismatch"
+
+
+# ---------------------------------------------------------------------------
+# Graded validation layer
+# ---------------------------------------------------------------------------
+
+def test_validate_recommendation_partial_match_is_note_not_warning():
+    """部分匹配 (四君子汤 for 心脾两虚证) should be a 🟡 note, not a warning."""
+    parsed = {
+        "syndrome": {"zh": "心脾两虚证", "en": "Heart-Spleen Deficiency"},
+        "formulas": {"zh": ["四君子汤"], "en": ["Si Jun Zi Tang"]},
+    }
+    result = validate_recommendation(parsed, {"formulas": []})
+    assert result["syndrome_formula_match"]["四君子汤"] is True
+    assert result["validation_warnings"] == []
+    assert any("部分匹配" in n for n in result["validation_notes"])
+
+
+def test_validate_recommendation_unusable_profile_is_note():
+    """档案证型字段不规范（功效描述/非证型内容）时应提示核档，而非误报不匹配。"""
+    parsed = {
+        "syndrome": {"zh": "热毒炽盛证", "en": "Exuberant Heat-Toxin Pattern"},
+        "formulas": {"zh": ["八宝丹"], "en": ["Ba Bao Dan"]},
+    }
+    result = validate_recommendation(parsed, {"formulas": []})
+    assert result["validation_warnings"] == []
+    assert any("无法自动校验" in n for n in result["validation_notes"])
 
 
 # ---------------------------------------------------------------------------
