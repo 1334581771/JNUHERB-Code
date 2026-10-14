@@ -6,9 +6,13 @@ Stages (run in order; each is idempotent and writes to data_ingest/):
       → jnuherb_protein_disease_links.csv   (filtered to jnuherb proteins)
   2   CTD aggregate associations (3.1 GB gz, streamed line-by-line)
       → merged into the same links CSV
+  3   OT indirect (EFO-propagated) associations — optional
+  filter  Drop EFO measurement/trait terms (therapeuticAreas == EFO:0001444
+      only) — half the OT index is metabolite/phenotype traits, not diseases
   gmt Regenerate disease_ctdot.gmt from the links CSV
       (top-N genes per disease; replaces the 90-term do.gmt for enrichment)
-  apply  Copy the links CSV into src/jnuherb/data/ (with .bak backup)
+  apply  Copy the links CSV into src/jnuherb/data/ (gzip-compressed, with
+      .bak backup)
 
 External reference needed for stage 1:
   data_ingest/raw/gene2ensembl.gz   (NCBI; maps ENSG ↔ ENSP ↔ GeneID)
@@ -428,6 +432,44 @@ def stage3_ot_indirect() -> None:
     _write_rows(rows, report, stage="3")
 
 
+def filter_measurement_terms() -> None:
+    """Drop EFO measurement/trait terms from the links table.
+
+    Over half of the OT disease index (25,334 / 45,896 terms) consists of
+    metabolite/phenotype MEASUREMENT traits ("1,2-dilinoleoyl-GPC
+    measurement", "blood pressure measurement"), not diseases — OT
+    propagates associations to them via EFO.  Their only therapeutic area
+    is EFO:0001444 (measurement); terms that ALSO belong to a real
+    disease therapeutic area are kept.  Without this filter the "disease"
+    count is inflated by ~5,300 phantom terms and enrichment/lookup get
+    polluted with trait sets.
+    """
+    import numpy as np
+    import pyarrow.parquet as pq
+    f = RAW / "ot_diseases.parquet"
+    if not f.exists():
+        sys.exit(f"missing {f} — required for the measurement-term filter")
+    idx = pq.read_table(f, columns=["id", "therapeuticAreas"]).to_pandas()
+    black: set[str] = set()
+    for _i, _r in idx.iterrows():
+        ta = _r["therapeuticAreas"]
+        ta_set = {str(x) for x in np.atleast_1d(ta)} if ta is not None else set()
+        if ta_set == {"EFO_0001444"}:
+            black.add(_norm_disease_id(_r["id"]) or _r["id"])
+
+    rows = _read_existing()
+    before = len(rows)
+    dropped = {k for k in rows if k[1] in black}
+    for k in dropped:
+        del rows[k]
+    report = {"measurement_terms_in_index": len(black),
+              "rows_dropped": len(dropped), "rows_before": before}
+    print(f"measurement-trait filter: dropped {len(dropped):,} rows "
+          f"({len({k[1] for k in dropped})} trait terms), "
+          f"{len(rows):,} rows remain")
+    _write_rows(rows, report, stage="filter")
+
+
 def gen_gmt(top_n: int = 500) -> None:
     """ disease_ctdot.gmt: top-N scored genes per disease, gene symbols."""
     import pandas as pd
@@ -503,7 +545,8 @@ def _write_rows(rows: dict, report: dict, stage: str) -> None:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("stage", choices=["1", "2", "3", "gmt", "apply"])
+    ap.add_argument("stage",
+                    choices=["1", "2", "3", "filter", "gmt", "apply"])
     ap.add_argument("--top-n", type=int, default=500, help="genes per disease in GMT")
     args = ap.parse_args()
     if args.stage == "1":
@@ -512,6 +555,8 @@ def main() -> int:
         stage2()
     elif args.stage == "3":
         stage3_ot_indirect()
+    elif args.stage == "filter":
+        filter_measurement_terms()
     elif args.stage == "gmt":
         gen_gmt(args.top_n)
     else:
