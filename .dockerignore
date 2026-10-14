@@ -30,3 +30,8 @@ examples/
 Dockerfile
 .dockerignore
 docker-compose.yml
+
+# SQLite db is rebuilt inside the image (RUN python -m jnuherb.build_db);
+# never copy a stale host-built db into the build context.
+src/jnuherb/data/jnuherb.db
+src/jnuherb/data/jnuherb.db.tmp

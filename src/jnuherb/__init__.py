@@ -39,8 +39,10 @@ __version__ = "0.1.0"
 from jnuherb.query import (
     get_chem_protein_links,
     get_chemicals,
+    get_diseases,
     get_formula,
     get_formula_tcm_links,
+    get_protein_disease_links,
     get_proteins,
     get_tcm,
     get_tcm_chem_links,
@@ -51,6 +53,7 @@ from jnuherb.analysis import (
     dfs_filter,
     from_proteins,
     from_tcm_or_formula,
+    resolve_disease_to_targets,
 )
 
 # Scoring functions
@@ -101,10 +104,14 @@ __all__ = [
     "get_chemicals",
     "get_chem_protein_links",
     "get_proteins",
+    # protein–disease links (CTD / Open Targets)
+    "get_protein_disease_links",
+    "get_diseases",
     # analysis
     "from_tcm_or_formula",
     "from_proteins",
     "dfs_filter",
+    "resolve_disease_to_targets",
     # score
     "herbiv_score",
     "component",

@@ -110,6 +110,7 @@ sudo docker info | grep -A 10 "Registry Mirrors"
 ```powershell
 rsync -avz --delete `
   --exclude='src/jnuherb/data/*.csv' `
+  --exclude='src/jnuherb/data/jnuherb.db' `
   --exclude='.git' `
   --exclude='__pycache__' `
   --exclude='*.pyc' `
@@ -253,6 +254,7 @@ sudo certbot --nginx -d 你的域名.com
 ```powershell
 rsync -avz --delete `
   --exclude='src/jnuherb/data/*.csv' `
+  --exclude='src/jnuherb/data/jnuherb.db' `
   --exclude='.git' `
   --exclude='__pycache__' `
   --exclude='*.pyc' `
@@ -562,7 +564,7 @@ sudo docker compose restart
 | 场景 | 命令 |
 |---|---|
 | 登录服务器 | `ssh root@111.228.21.145` |
-| 上传整个项目 | `rsync -avz --delete --exclude='src/jnuherb/data/*.csv' /d/herbtar/jnuherb/ root@111.228.21.145:/opt/jnuherb/` |
+| 上传整个项目 | `rsync -avz --delete --exclude='src/jnuherb/data/*.csv' --exclude='src/jnuherb/data/jnuherb.db' /d/herbtar/jnuherb/ root@111.228.21.145:/opt/jnuherb/` |
 | 上传单个文件 | `scp /d/herbtar/jnuherb/src/jnuherb/data/streamlit_app.py root@111.228.21.145:/opt/jnuherb/src/jnuherb/data/` |
 | 停止容器 | `sudo docker compose down` |
 | 启动/重建容器 | `sudo docker compose up -d --build` |
