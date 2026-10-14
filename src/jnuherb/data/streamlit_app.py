@@ -1814,7 +1814,7 @@ with tabs[0]:
           </div>
           <div class="jnu-hero-stats">
             <span class="jnu-stat"><b>2,000+</b> syndromes</span>
-            <span class="jnu-stat"><b>18,900+</b> diseases</span>
+            <span class="jnu-stat"><b>12,000+</b> diseases</span>
             <span class="jnu-stat"><b>12,500+</b> formulas</span>
             <span class="jnu-stat"><b>4,700+</b> herbs</span>
             <span class="jnu-stat"><b>13,100+</b> chemicals</span>
