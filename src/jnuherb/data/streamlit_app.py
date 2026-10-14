@@ -3,8 +3,8 @@
 
 Supports two analysis modes:
 
-* **Reverse**: proteins → chemicals → TCMs → formulas
 * **Forward**: TCMs / formulas / monomers → chemicals → proteins
+* **Reverse**: disease / target proteins → chemicals → TCMs → formulas
 
 Launch via::
 
@@ -954,7 +954,7 @@ st.sidebar.subheader("Analysis Mode")
 # Short pill labels with a new widget key; direction explained by the caption.
 analysis_mode = st.sidebar.radio(
     "Choose direction",
-    ["🎯 Reverse", "🚀 Forward"],
+    ["🚀 Forward", "🎯 Reverse"],
     key="analysis_mode_sel",
     horizontal=True,
     label_visibility="collapsed",
@@ -963,7 +963,7 @@ is_forward = analysis_mode.startswith("🚀")
 if is_forward:
     st.sidebar.caption("🚀 Forward: TCMs / Formulas / Monomers → Proteins")
 else:
-    st.sidebar.caption("🎯 Reverse: Target Proteins → Chemicals → TCMs → Formulas")
+    st.sidebar.caption("🎯 Reverse: Disease / Target Proteins → Chemicals → TCMs → Formulas")
 
 st.sidebar.markdown("---")
 
@@ -1040,7 +1040,50 @@ if is_forward:
         )
 else:
     # ===== REVERSE MODE =====
-    st.sidebar.subheader("Target Proteins")
+    st.sidebar.subheader("Disease or Target Proteins")
+
+    # Disease entry: resolves a disease name/id to seed target proteins via
+    # the protein–disease link table (CTD / Open Targets).  When filled it
+    # takes precedence over the manual protein list below.
+    reverse_disease = st.sidebar.text_input(
+        "Disease name (CTD / Open Targets lookup)",
+        placeholder="e.g. lung cancer · diabetes · EFO:0000180",
+        key="reverse_disease",
+        help="Type a disease name or ID (MONDO:/EFO:/Orphanet:/MESH:); "
+             "its top associated targets become the seed proteins.",
+    )
+    if reverse_disease.strip():
+        _d_col1, _d_col2 = st.sidebar.columns(2)
+        reverse_disease_score = _d_col1.number_input(
+            "Min evidence score", min_value=0.0, max_value=1.0, value=0.10,
+            step=0.05, key="reverse_disease_score",
+            help="Open Targets association score floor; CTD curated rows "
+                 "(no numeric score) always pass.",
+        )
+        reverse_disease_topn = _d_col2.number_input(
+            "Max targets", min_value=5, max_value=200, value=30, step=5,
+            key="reverse_disease_topn",
+        )
+        try:
+            _resolved = _resolve_disease(reverse_disease.strip(),
+                                         float(reverse_disease_score),
+                                         int(reverse_disease_topn))
+        except Exception as e:  # noqa: BLE001
+            _resolved = None
+            st.sidebar.warning(f"Disease lookup unavailable: {e}")
+        if _resolved and _resolved["targets"]:
+            st.sidebar.caption(
+                f"✅ {_resolved['disease_name']} "
+                f"({_resolved['disease_id']}) → {len(_resolved['targets'])} "
+                f"seed targets "
+                f"(of {_resolved['n_total']} associated; "
+                f"top: {', '.join(_resolved.get('top_genes', [])[:5])})"
+            )
+        elif _resolved is not None:
+            st.sidebar.caption("⚠️ No targets above threshold for this disease.")
+    else:
+        st.sidebar.caption("…or paste target proteins directly:")
+
     reverse_text = st.sidebar.text_area(
         "Protein IDs (one per line)",
         placeholder="ENSP00000381588\nENSP00000252519",
@@ -1188,6 +1231,14 @@ def _run_with_timeout(func, timeout: float, *args, **kwargs):
 # ---------------------------------------------------------------------------
 # Cached analysis runners
 # ---------------------------------------------------------------------------
+
+@st.cache_data(show_spinner="Resolving disease targets...")
+def _resolve_disease(disease: str, min_score: float, max_targets: int) -> dict | None:
+    """Disease name/id → seed Ensembl protein IDs (CTD / Open Targets)."""
+    from jnuherb.analysis import resolve_disease_to_targets
+    return resolve_disease_to_targets(disease, min_score=min_score,
+                                      max_targets=max_targets)
+
 
 @st.cache_data(show_spinner="Running reverse analysis...")
 def _run_reverse(
@@ -1563,13 +1614,45 @@ if run_btn:
                         output_dir=str(output_dir),
                     )
             else:
-                proteins = parse_lines(reverse_text)
-                if not proteins:
-                    st.error("Please enter at least one target protein ID!")
-                    raise _AnalysisInputError()
-                if len(proteins) > 30:
-                    st.error("Please enter at most 30 target proteins in Reverse mode.")
-                    raise _AnalysisInputError()
+                # Disease-seeded run takes precedence over manual proteins.
+                disease_query = st.session_state.get("reverse_disease", "").strip()
+                resolved = None
+                if disease_query:
+                    try:
+                        resolved = _resolve_disease(
+                            disease_query,
+                            float(st.session_state.get("reverse_disease_score", 0.10)),
+                            int(st.session_state.get("reverse_disease_topn", 30)),
+                        )
+                    except Exception as e:  # noqa: BLE001
+                        st.error(f"Disease lookup failed: {e}")
+                        raise _AnalysisInputError()
+                    if not resolved or not resolved["targets"]:
+                        st.error(
+                            f"Disease “{disease_query}” resolved to no targets — "
+                            "check the name/ID, or lower the evidence score."
+                        )
+                        raise _AnalysisInputError()
+
+                if resolved and resolved["targets"]:
+                    proteins = list(resolved["targets"])
+                    st.info(
+                        f"🎯 Disease **{resolved['disease_name']}** "
+                        f"({resolved['disease_id']}) → seeding Reverse with "
+                        f"{len(proteins)} targets "
+                        f"(of {resolved['n_total']} associated; score ≥ "
+                        f"{resolved['min_score']})"
+                    )
+                else:
+                    proteins = parse_lines(reverse_text)
+                    if not proteins:
+                        st.error("Please enter at least one target protein ID "
+                                 "or a disease name!")
+                        raise _AnalysisInputError()
+                    if len(proteins) > 30:
+                        st.error("Please enter at most 30 target proteins in "
+                                 "Reverse mode.")
+                        raise _AnalysisInputError()
 
                 fml_list = parse_lines(formula_text)
                 if fml_list and len(fml_list) > 30:
@@ -1734,24 +1817,26 @@ with tabs[0]:
             <p><b>Example:</b> <code>I have a headache and fever</code> · <code>头痛发热</code></p>
           </div>
           <div class="jnu-card">
-            <h3>🚀 Bidirectional &nbsp;<span class="jnu-card-arrow">TCMs ↔ Proteins</span></h3>
+            <h3>🚀 Bidirectional &nbsp;<span class="jnu-card-arrow">Disease ↔ TCMs</span></h3>
             <p><b>Forward:</b> start from herbs, formulas or monomer ingredients
                and map them to protein targets and pathways.
-               <b>Reverse:</b> start from disease targets and discover candidate
-               herbs, formulas and active ingredients.</p>
+               <b>Reverse:</b> start from a disease (or its target proteins)
+               and discover candidate herbs, formulas and active ingredients.</p>
             <p><b>When to use:</b> mechanism elucidation, target-driven drug
                discovery, drug repositioning.</p>
-            <p><b>Example:</b> <code>柴胡, 黄芩</code> · <code>TNF, IL6, TP53</code></p>
+            <p><b>Example:</b> <code>柴胡, 黄芩</code> · <code>hypertension</code>
+               · <code>TNF, IL6, TP53</code></p>
           </div>
           <div class="jnu-card">
-            <h3>🧩 Optimization &nbsp;<span class="jnu-card-arrow">Candidates → Formula</span></h3>
-            <p>Combine shortlisted herbs or monomers into an optimized
-               compatible prescription under a capacity budget, ranked by
+            <h3>🧩 Optimization &nbsp;<span class="jnu-card-arrow">Disease → Formula</span></h3>
+            <p>Combine the herbs or monomers shortlisted from a disease /
+               reverse / forward analysis into an optimized compatible
+               prescription under a capacity budget, ranked by
                probability-union HerbiV scoring.</p>
             <p><b>When to use:</b> TCM compatibility design from
                reverse or forward analysis hits.</p>
-            <p><b>Example:</b> optimize the herbs returned by an AI or
-               reverse query.</p>
+            <p><b>Example:</b> optimize the herbs returned by an AI,
+               disease or reverse query.</p>
           </div>
           <div class="jnu-card">
             <h3>🔬 Virtual Screening &nbsp;<span class="jnu-card-arrow">Ligand → Protein</span></h3>
@@ -1766,14 +1851,15 @@ with tabs[0]:
         """, unsafe_allow_html=True)
 
         st.caption("👈 Start with **🤖 AI**, or pick a direction in the sidebar "
-                   "(**🎯 Reverse** / **🚀 Forward**); then optimize combinations "
+                   "(**🚀 Forward** / **🎯 Reverse**); then optimize combinations "
                    "under **🧩 Optimization** and dock top hits under **🔬 Docking**.")
 
         with st.expander("📖 Detailed guide & more examples"):
             st.markdown("""
-            **Reverse mode** (Proteins → TCMs):
+            **Reverse mode** (Disease / Proteins → TCMs):
             1. Select *🎯 Reverse* in the sidebar.
-            2. Enter target protein IDs (Ensembl IDs or gene names).
+            2. Enter a disease name (CTD / Open Targets lookup) or paste
+               target protein IDs (Ensembl IDs or gene names).
             3. Optionally filter by specific TCM formula (expand **Filters**).
             4. Click **🚀 Run Analysis**.
 
@@ -2411,8 +2497,9 @@ with tabs[7]:
 
 # ---- Tab 8: DO Enrichment ----
 with tabs[8]:
-    st.subheader("🧬 DO Enrichment")
-    st.markdown("Based on the **Protein Results** from the current analysis.")
+    st.subheader("🧬 Disease Enrichment")
+    st.markdown("Based on the **Protein Results** from the current analysis "
+                "(CTD / Open Targets disease associations).")
 
     if result is None:
         st.info("👈 Run a Forward/Reverse analysis first.")
@@ -2423,19 +2510,19 @@ with tabs[8]:
         else:
             st.caption(f"{len(genes)} unique gene(s) extracted from Protein Results.")
             if "enr_results" not in st.session_state:
-                with st.spinner("Running DO enrichment..."):
+                with st.spinner("Running disease enrichment..."):
                     st.session_state.enr_results = run_enrichment(genes)
 
             enr = st.session_state.enr_results
             st.write(
                 f"Gene mapping: {enr['do']['n_mapped']} / {enr['do']['n_input']} "
-                f"genes matched to DO background gene sets."
+                f"genes matched to disease background gene sets."
             )
             _display_enrichment(
                 enr["do"]["top"],
                 enr["do"]["full"],
-                "Disease Ontology / OMIM (Top 10)",
-                empty_msg="No disease ontology terms found for the current gene set.",
+                "Disease — CTD / Open Targets (Top 10)",
+                empty_msg="No disease terms found for the current gene set.",
                 download_key="download_do",
             )
 

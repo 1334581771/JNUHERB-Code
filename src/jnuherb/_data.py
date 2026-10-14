@@ -30,6 +30,7 @@ _TABLE_FILES: dict[str, str] = {
     "jnuherb_formula_tcm_links": "jnuherb_formula_tcm_links.csv",
     "jnuherb_tcm_chemical_links": "jnuherb_tcm_chemical_links.csv",
     "jnuherb_chemical_protein_links": "jnuherb_chemical_protein_links.csv",
+    "jnuherb_protein_disease_links": "jnuherb_protein_disease_links.csv.gz",
 }
 
 # Columns indexed in jnuherb.db: primary IDs, join keys and the name
@@ -42,6 +43,7 @@ _ID_INDEXES: dict[str, list[str]] = {
     "jnuherb_formula_tcm_links": ["HVPID", "HVMID"],
     "jnuherb_tcm_chemical_links": ["HVMID", "HVCID"],
     "jnuherb_chemical_protein_links": ["HVCID", "Ensembl_ID"],
+    "jnuherb_protein_disease_links": ["Ensembl_ID", "disease_id", "disease_name"],
 }
 
 

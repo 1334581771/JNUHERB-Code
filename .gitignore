@@ -15,3 +15,8 @@ venv/
 results/
 src/jnuherb/data/jnuherb.db
 src/jnuherb/data/jnuherb.db.tmp
+# CTD raw data must not be redistributed (license); OT needs attribution.
+# Only the filtered derivative (src/jnuherb/data/jnuherb_protein_disease_links.csv.gz)
+# is bundled with the package.
+data_ingest/raw/
+data_ingest/jnuherb_protein_disease_links.csv

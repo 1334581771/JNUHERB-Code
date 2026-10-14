@@ -1,7 +1,7 @@
 """Database query functions for jnuherb datasets.
 
 These functions read from the bundled CSV data files and return filtered
-DataFrames.  All seven exported functions follow the same pattern:
+DataFrames.  All exported getters follow the same pattern:
 
 1. Load the full CSV table (cached after first access).
 2. Filter rows where ``by`` column matches any value in ``items``.
@@ -20,6 +20,7 @@ jnuherb_proteins               ~14,200   Target proteins with gene names
 jnuherb_formula_tcm_links      ~28,300   Formula-TCM connections
 jnuherb_tcm_chemical_links     ~60,600   TCM-chemical connections
 jnuherb_chemical_protein_links ~450,800  Chemical-protein connections
+jnuherb_protein_disease_links  ~1,650,000  Protein–disease links (CTD / Open Targets)
 =============================  ========  ==================================
 """
 
@@ -169,6 +170,74 @@ def get_chem_protein_links(
     result["Combined_score"] = pd.to_numeric(result["Combined_score"]) / 1000.0
     result.reset_index(drop=True, inplace=True)
     return result
+
+
+def get_protein_disease_links(
+    by_disease: ItemsLike | None = None,
+    by_protein: ItemsLike | None = None,
+    min_score: float = 0.0,
+    sources: ItemsLike | None = None,
+) -> pd.DataFrame:
+    """Query protein–disease association links (CTD / Open Targets).
+
+    At least one of ``by_disease`` / ``by_protein`` should be given; when
+    both are None the whole (filtered) table is returned.
+
+    Args:
+        by_disease: disease_ids (``"EFO:0000180"``) or disease_names to match.
+        by_protein: Ensembl protein IDs to match.
+        min_score: keep rows with numeric ``score`` >= this; rows with an
+            empty score (CTD curated) always pass.
+        sources: restrict to sources (e.g. ``["OT", "CTD"]``).
+
+    Returns:
+        DataFrame of matching links, score as float in [0, 1].
+    """
+    df = _load_table("jnuherb_protein_disease_links")
+    if by_disease is not None:
+        items = _ensure_list(by_disease)
+        # case-insensitive on disease_name ("Hypertension" vs "hypertension");
+        # disease_id matching stays exact (prefixed vocabulary ids)
+        names_lower = df["disease_name"].str.lower().isin(
+            {str(i).lower() for i in items})
+        df = df[df["disease_id"].isin(items) | names_lower]
+    if by_protein is not None:
+        df = df[df["Ensembl_ID"].isin(_ensure_list(by_protein))]
+    if sources is not None:
+        df = df[df["source"].isin(_ensure_list(sources))]
+    if min_score > 0:
+        num = pd.to_numeric(df["score"], errors="coerce")
+        df = df[(num >= min_score) | (df["score"] == "")]
+    result = df.copy()
+    result["score"] = pd.to_numeric(result["score"], errors="coerce")
+    result.reset_index(drop=True, inplace=True)
+    return result
+
+
+def get_diseases(keyword: str, limit: int = 20) -> pd.DataFrame:
+    """Fuzzy-search disease names/ids for the Reverse disease lookup box.
+
+    Matches substring (case-insensitive) against disease_name, and exact /
+    prefix against disease_id.  Returns one row per disease with its
+    supporting-source count so the UI can rank suggestions.
+    """
+    df = _load_table("jnuherb_protein_disease_links")
+    kw = keyword.strip().lower()
+    if not kw:
+        return pd.DataFrame(columns=["disease_id", "disease_name", "n_links",
+                                     "best_score", "sources"])
+    mask = (df["disease_name"].str.lower().str.contains(kw, na=False)
+            | df["disease_id"].str.lower().str.startswith(kw))
+    sub = df[mask]
+    if sub.empty:
+        return pd.DataFrame(columns=["disease_id", "disease_name", "n_links",
+                                     "best_score", "sources"])
+    agg = (sub.groupby(["disease_id", "disease_name"], as_index=False)
+              .agg(n_links=("Ensembl_ID", "nunique"),
+                   best_score=("score", "max"),
+                   sources=("source", lambda s: "/".join(sorted(set(s))))))
+    agg["best_score"] = pd.to_numeric(agg["best_score"], errors="coerce")
+    return agg.sort_values("n_links", ascending=False).head(limit)
 
 
 def get_proteins(by: str, items: ItemsLike) -> pd.DataFrame:

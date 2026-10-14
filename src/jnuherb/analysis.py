@@ -19,10 +19,48 @@ from jnuherb.query import (
     get_chemicals,
     get_formula,
     get_formula_tcm_links,
+    get_protein_disease_links,
     get_proteins,
     get_tcm,
     get_tcm_chem_links,
 )
+
+
+def resolve_disease_to_targets(
+    disease: str,
+    min_score: float = 0.1,
+    max_targets: int = 200,
+    sources: Optional[list[str]] = None,
+) -> dict[str, Any]:
+    """Resolve a disease name/id to seed target proteins for Reverse mode.
+
+    Looks the disease up in the protein–disease link table (CTD / Open
+    Targets), ranks associated proteins by evidence score and returns the
+    top Ensembl IDs, ready to feed :func:`from_proteins`.
+
+    Returns:
+        ``{"disease_id", "disease_name", "targets": [...], "n_total",
+        "min_score"}`` — ``targets`` is empty when the disease is unknown.
+    """
+    links = get_protein_disease_links(by_disease=disease, min_score=min_score,
+                                      sources=sources)
+    out: dict[str, Any] = {
+        "disease_id": "", "disease_name": disease,
+        "targets": [], "n_total": 0, "min_score": min_score,
+    }
+    if links.empty:
+        return out
+
+    best = (links.groupby(["Ensembl_ID", "gene_name", "disease_id",
+                           "disease_name"], as_index=False)
+                 .agg(score=("score", "max")))
+    best = best.sort_values("score", ascending=False, na_position="last")
+    out["disease_id"] = best["disease_id"].iloc[0]
+    out["disease_name"] = best["disease_name"].iloc[0] or disease
+    out["n_total"] = len(best)
+    out["targets"] = best["Ensembl_ID"].head(max_targets).tolist()
+    out["top_genes"] = best["gene_name"].head(max_targets).tolist()
+    return out
 
 
 # ---------------------------------------------------------------------------

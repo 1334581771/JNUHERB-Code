@@ -20,7 +20,9 @@ _GMT_FILES = {
     "go_bp": "go_bp.gmt",
     "go_cc": "go_cc.gmt",
     "go_mf": "go_mf.gmt",
-    "do": "do.gmt",
+    # CTD / Open Targets disease associations replace the old 90-term
+    # Disease Ontology GMT (14k+ disease terms, top 500 genes each)
+    "do": "disease_ctdot.gmt",
 }
 
 
@@ -95,7 +97,7 @@ def _safe_enrich(
 def run_enrichment(
     gene_list: list[str],
 ) -> dict[str, dict]:
-    """Run offline KEGG, GO (BP/CC/MF) and DO enrichment on a gene list.
+    """Run offline KEGG, GO (BP/CC/MF) and disease enrichment on a gene list.
 
     Parameters
     ----------
@@ -143,8 +145,8 @@ def run_enrichment(
         go_full = pd.DataFrame()
         go_top = pd.DataFrame()
 
-    # DO
-    do_full, do_n_in, do_n_map = _safe_enrich(genes, _gmt_path(_GMT_FILES["do"]), "DO")
+    # Disease (CTD / Open Targets gene sets)
+    do_full, do_n_in, do_n_map = _safe_enrich(genes, _gmt_path(_GMT_FILES["do"]), "Disease")
     do_top = do_full.head(10)
 
     return {
