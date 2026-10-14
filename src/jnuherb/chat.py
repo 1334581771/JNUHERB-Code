@@ -243,6 +243,23 @@ _BINGJI_TOKENS = [
     "阳亢", "肝风", "内风", "腑实", "积滞",
 ]
 _DEFICIENCY_TOKENS = ("气虚", "血虚", "阴虚", "阳虚", "气血两虚", "气血亏虚", "津亏")
+
+# 临床同义的 GB/T 标准词对：双方在标准中各自独立成词、标准未给
+# 别名关系，但检索时应当互通（肝郁气滞证 ≈ 肝气郁结证）。不参与
+# 归一化（两者都是标准词，不应互相覆盖），只在匹配时给近义加分。
+_SYNDROME_NEAR_EQUIV: list[set[str]] = [
+    {"肝气郁结证", "肝郁气滞证"},
+    {"瘀阻胸胁证", "气滞血瘀证"},
+]
+
+
+def _syndrome_stem(term: str) -> str:
+    """去掉结尾"证"的词干：肾阳虚水泛 -> 肾阳虚（父子证型包含匹配用）。"""
+    return term[:-1] if term.endswith("证") else term
+
+
+def _syndrome_near_equiv(a: str, b: str) -> bool:
+    return any(a in grp and b in grp for grp in _SYNDROME_NEAR_EQUIV)
 _TREATMENT_TOKENS = [
     "益气", "补气", "健脾", "补脾", "养血", "补血", "滋阴", "养阴",
     "温阳", "助阳", "壮阳", "回阳", "清热", "泻火", "解毒", "化痰",
@@ -289,6 +306,12 @@ def _syndrome_compatibility(syndrome_zh: str, pattern_zh: str) -> tuple[str, lis
     syndrome_zh = canonical_syndrome(syndrome_zh)
     pattern_zh = canonical_syndrome(pattern_zh)
     if pattern_zh in syndrome_zh or syndrome_zh in pattern_zh:
+        return "full", []
+    # 父子证型：去"证"词干互为子串（肾阳虚 ⊂ 肾阳虚水泛）或临床同义
+    # 标准词对（肝郁气滞 ≈ 肝气郁结）均按 full 计
+    s_stem, p_stem = _syndrome_stem(syndrome_zh), _syndrome_stem(pattern_zh)
+    if (s_stem and p_stem and (s_stem in p_stem or p_stem in s_stem)) \
+            or _syndrome_near_equiv(syndrome_zh, pattern_zh):
         return "full", []
     s_zf, s_bj = _extract_syndrome_tokens(syndrome_zh)
     p_zf, p_bj = _extract_syndrome_tokens(pattern_zh)
@@ -361,6 +384,24 @@ SYSTEM_PROMPT_TEMPLATE = """你是一位经验丰富的中医专家，同时具�
 # ---------------------------------------------------------------------------
 # Classic formula syndrome-differentiation profiles
 # ---------------------------------------------------------------------------
+# 档案 source_classic 字段中的数据库来源码（非典籍出处），用于经典方判定
+_DB_SOURCE_CODES = {"ITCM", "ETCM", "HERB", "TCMID", "CPMCP", "BATMAN", "SYMMAP"}
+
+
+def _is_classic_source(source_classic: str) -> bool:
+    """True when the profile's source looks like a classical book citation.
+
+    Herbarium-style database provenance codes (ITCM/ETCM/HERB/CPMCP...) are
+    NOT classic citations, while anything else — 《伤寒论》, 景岳全书, pinyin
+    book titles like 'shang han lun' — counts as one.
+    """
+    sc = (source_classic or "").strip()
+    if not sc:
+        return False
+    head = re.split(r"[：:，,。\s]", sc)[0].strip()
+    return head.upper() not in _DB_SOURCE_CODES
+
+
 _PROFILES_CACHE: Optional[dict[str, Any]] = None
 _GBT_CACHE: Optional[dict[str, Any]] = None
 
@@ -401,19 +442,21 @@ def _load_gbt_syndromes() -> dict[str, Any]:
 def canonical_syndrome(name: str) -> str:
     """Map a syndrome name to its GB/T 16751.2 standard term when known.
 
-    Resolution order: official standard term → official synonym → curated
-    clinical-alias mapping.  Unknown names are returned unchanged.
+    Resolution order: curated clinical-alias mapping (explicit merges such
+    as 心脾气血两虚证 -> 心脾两虚证, which shadow the standard set) →
+    official synonym → unchanged.  Unknown names pass through as-is.
     """
     name = (name or "").strip()
     if not name:
         return name
     gbt = _load_gbt_syndromes()
-    if name in gbt["standard_set"]:
-        return name
+    mapped = gbt["clinical_alias_to_standard"].get(name)
+    if mapped:
+        return mapped
     mapped = gbt["alias_to_standard"].get(name)
     if mapped:
         return mapped
-    return gbt["clinical_alias_to_standard"].get(name, name)
+    return name
 
 
 def _load_syndrome_profiles() -> dict[str, Any]:
@@ -597,10 +640,15 @@ def _score_formulas_by_syndrome(
       3. Pathogenesis token overlap (气虚/阴虚/湿热/...)     → +4 each
       4. Treatment-method token overlap with the formula's
          function/instruction text (益气/健脾/养血/...)      → +2 each
+      5. Classic-formula bonus: formulas whose syndrome
+         profile cites a classical source (出自经典医籍)     → +6
 
     Unlike keyword retrieval this channel sees the whole table, so a formula
     whose wording differs from the patient's description can still surface
-    when its recorded syndrome matches the differentiation result.
+    when its recorded syndrome matches the differentiation result.  The
+    classic bonus keeps canonical decoctions (归脾汤, 四君子汤, ...) from
+    being crowded out of the candidate list by same-syndrome proprietary
+    preparations scoring identical pattern points.
     """
     from jnuherb._data import _load_table
 
@@ -639,15 +687,49 @@ def _score_formulas_by_syndrome(
     for idx in fml_df.index:
         name = str(fml_df.at[idx, "name"]) if "name" in fml_df.columns else ""
         profile = profiles.get(name, {}) if name else {}
-        pattern_zh = profile.get("syndrome_pattern_zh", "")
+        pattern_zh = canonical_syndrome(profile.get("syndrome_pattern_zh", ""))
         pattern_en = profile.get("syndrome_pattern_en", "")
-        haystack = f"{syn_text.at[idx]} {pattern_zh} {pattern_en}"
+        # 库方 Syndromes_zh 字段的每个证名单独归一化后一并纳入匹配语料：
+        # HERB 来源的该字段常是旧称/异名（食积证），归一化后才能与
+        # 推断证型（饮食积滞证）全匹配
+        syn_raw = syn_text.at[idx]
+        syn_canon_list = [
+            canonical_syndrome(p)
+            for p in re.split(r"[;；、/,，]", syn_raw)
+            if p.strip()
+        ]
+        syn_canon = " ".join(syn_canon_list)
+        haystack = f"{syn_raw} {syn_canon} {pattern_zh} {pattern_en}"
 
         score = 0
         hits: list[str] = []
-        if pattern_zh and (pattern_zh in syndrome_zh or syndrome_zh in pattern_zh):
+        s_stem = _syndrome_stem(syndrome_zh)
+        p_stem = _syndrome_stem(pattern_zh)
+        if pattern_zh and (
+            pattern_zh in syndrome_zh or syndrome_zh in pattern_zh
+            or (s_stem and p_stem and (s_stem in p_stem or p_stem in s_stem))
+        ):
             score += 12
             hits.append(f"证型全匹配:{pattern_zh}")
+            # canonical 后精确相等（而非父子证型词干包含）再加 +1：
+            # 肾阳虚证查询时让直指该证的经典（右归丸 pattern=肾阳不足证
+            # →canonical 肾阳虚证）排在父子证型经典（金匮肾气丸=肾阳虚水泛证、
+            # 真人养脏汤=脾肾阳虚证）之前，破解 39 个同分经典方内卷
+            if pattern_zh == syndrome_zh:
+                score += 1
+                hits.append("直指该证")
+        elif syndrome_zh and any(
+            syndrome_zh == t or syndrome_zh in t for t in syn_canon_list
+        ):
+            # 库方 Syndromes_zh 字段（旧称/异名经归一化后）与推断证型全匹配
+            score += 12
+            hits.append(f"库证型全匹配:{syndrome_zh}")
+        elif pattern_zh and _syndrome_near_equiv(syndrome_zh, pattern_zh):
+            # 临床同义标准词对（肝郁气滞 ≈ 肝气郁结）：与全匹配同分，
+            # 保证柴胡疏肝散/血府逐瘀汤等以主证身份进入候选池而非
+            # 被同证型中成药用功效字段 token 淹没
+            score += 12
+            hits.append(f"近义证型:{pattern_zh}")
         else:
             for t in zangfu:
                 if t in haystack:
@@ -661,6 +743,12 @@ def _score_formulas_by_syndrome(
             if t in func_text.at[idx]:
                 score += 2
                 hits.append(f"治法:{t}")
+        # 经典方加权：辨证档案出处为经典医籍者 +6，避免被同分中成药淹没
+        # （说明书式中成药功效字段几乎必含治法词，经典方档案文本稀疏，
+        # 加权不足会被同证型中成药系统性挤出候选池）
+        if _is_classic_source(profile.get("source_classic", "")):
+            score += 6
+            hits.append("经典方")
 
         if score == 0:
             continue
@@ -676,10 +764,12 @@ def _score_formulas_by_syndrome(
     # LLM can still consider the canonical prescription.
     by_name = {r.get("name", ""): r for r in scored}
     for name, profile in profiles.items():
-        pattern_zh = profile.get("syndrome_pattern_zh", "")
+        pattern_zh = canonical_syndrome(profile.get("syndrome_pattern_zh", ""))
         if not pattern_zh:
             continue
-        if not (pattern_zh in syndrome_zh or syndrome_zh in pattern_zh):
+        f_stem = _syndrome_stem(pattern_zh)
+        if not (pattern_zh in syndrome_zh or syndrome_zh in pattern_zh
+                or (s_stem and f_stem and (s_stem in f_stem or f_stem in s_stem))):
             continue
         if name in by_name:
             continue
@@ -694,12 +784,25 @@ def _score_formulas_by_syndrome(
                 "Source Document": profile.get("source_classic", ""),
                 "_synthetic": True,
             }
-        db_record["match_score"] = 12
+        db_record["match_score"] = 12 + 6  # exact pattern + classic bonus
         db_record["match_source"] = "syndrome"
-        db_record["_match_detail"] = [f"证型全匹配:{pattern_zh}"]
+        db_record["_match_detail"] = [f"证型全匹配:{pattern_zh}", "经典方"]
         scored.append(db_record)
 
-    scored.sort(key=lambda r: r.get("match_score", 0), reverse=True)
+    # 同名去重（库中存在大量重名行，如人参散x26、当归补血汤x6），保留最高分；
+    # 同分时经典方优先，避免被排序稳定性交给库行序的中成药占位
+    best: dict[str, dict[str, Any]] = {}
+    for rec in scored:
+        key = rec.get("name", "")
+        if not key:
+            continue
+        if key not in best or rec.get("match_score", 0) > best[key].get("match_score", 0):
+            best[key] = rec
+    scored = list(best.values())
+    scored.sort(key=lambda r: (
+        -r.get("match_score", 0),
+        "经典方" not in r.get("_match_detail", []),
+    ))
     return scored[:top_k]
 
 
@@ -714,7 +817,7 @@ def consult(
     model: str = DEEPSEEK_MODEL,
     extra_context: str = "",
     top_k_herbs: int = 15,
-    top_k_formulas: int = 10,
+    top_k_formulas: int = 20,
 ) -> dict[str, Any]:
     """Consult the DeepSeek AI for TCM syndrome analysis and recommendations.
 
@@ -794,6 +897,8 @@ def consult(
         f"治法 Treatment principle：{treatment_zh} / {stage1['treatment_principle']['en']}\n\n"
         "选方要求：请优先从下方候选方剂中选择【对应证型与上述证型一致，或脏腑病机相合（可作基础方加减）】者；"
         "每个候选方剂附带辨证档案/证型字段，请据此核对后再选。"
+        "若候选中同时存在经典汤剂（如X汤/X丸出自经典医籍）与功效相近的中成药，请优先推荐经典汤剂，"
+        "中成药可作为衍生替代方案列出。"
         "若候选中确实没有对证方剂，请明确说明，不要勉强推荐证型相悖的方剂。"
     )
 

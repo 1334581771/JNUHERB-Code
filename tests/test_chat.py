@@ -166,7 +166,12 @@ def test_validate_recommendation_synthetic_warning():
         "formulas": {"zh": ["萆薢分清饮"], "en": ["Bixie Fenqing Yin"]},
     }
     candidates = {"formulas": [{"name": "萆薢分清饮", "_synthetic": True}]}
-    result = validate_recommendation(parsed, candidates)
+    # Simulate a DB miss regardless of ingest state: the classic-governance
+    # pipeline (scripts/build_classic_profiles.py) may add this formula to the
+    # real DB, which would flip db_coverage without changing the semantics
+    # being tested here.
+    with patch("jnuherb.chat._find_formula_in_db", return_value=None):
+        result = validate_recommendation(parsed, candidates)
     assert result["db_coverage"]["萆薢分清饮"] is False
     assert any("不在数据库中" in w for w in result["validation_warnings"])
 
