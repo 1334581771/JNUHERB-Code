@@ -1059,21 +1059,21 @@ else:
     # the protein–disease link table (CTD / Open Targets).  When filled it
     # takes precedence over the manual protein list below.
     reverse_disease = st.sidebar.text_input(
-        "Disease name (CTD / Open Targets lookup)",
+        "Disease name lookup",
         placeholder="e.g. lung cancer · diabetes · 高血压",
         key="reverse_disease",
-        help="Type a disease name (English or 中文) or ID "
-             "(MONDO:/EFO:/Orphanet:/MESH:); its top associated targets "
-             "become the seed proteins. Chinese names are translated "
-             "automatically.",
+        help="Type a disease name (English or 中文) or a standard disease "
+             "ID; its top associated targets become the seed proteins. "
+             "Chinese names are translated automatically.",
     )
     if reverse_disease.strip():
         _d_col1, _d_col2 = st.sidebar.columns(2)
         reverse_disease_score = _d_col1.number_input(
             "Min evidence score", min_value=0.0, max_value=1.0, value=0.10,
             step=0.05, key="reverse_disease_score",
-            help="Open Targets association score floor; CTD curated rows "
-                 "(no numeric score) always pass.",
+            help="Evidence score floor for scored disease–target "
+                 "associations; curated evidence rows (no numeric score) "
+                 "always pass.",
         )
         reverse_disease_topn = _d_col2.number_input(
             "Max targets", min_value=5, max_value=200, value=30, step=5,
@@ -1809,9 +1809,8 @@ with tabs[0]:
             JNUHERB is an integrated web server for traditional Chinese medicine
             research, unifying AI-assisted syndrome differentiation, bidirectional
             (forward and reverse) network pharmacology, disease-anchored target
-            discovery powered by CTD / Open Targets associations, TCM
-            compatibility optimization, and molecular-docking-based virtual
-            screening in a single platform.
+            discovery, TCM compatibility optimization, and
+            molecular-docking-based virtual screening in a single platform.
           </div>
           <div class="jnu-hero-stats">
             <span class="jnu-stat"><b>2,000+</b> syndromes</span>
@@ -1876,7 +1875,7 @@ with tabs[0]:
             st.markdown("""
             **Reverse mode** (Disease / Proteins → TCMs):
             1. Select *🎯 Reverse* in the sidebar.
-            2. Enter a disease name (CTD / Open Targets lookup) or paste
+            2. Enter a disease name (English or 中文) or paste
                target protein IDs (Ensembl IDs or gene names).
             3. Optionally filter by specific TCM formula (expand **Filters**).
             4. Click **🚀 Run Analysis**.
@@ -2516,8 +2515,7 @@ with tabs[7]:
 # ---- Tab 8: DO Enrichment ----
 with tabs[8]:
     st.subheader("🧬 Disease Enrichment")
-    st.markdown("Based on the **Protein Results** from the current analysis "
-                "(CTD / Open Targets disease associations).")
+    st.markdown("Based on the **Protein Results** from the current analysis.")
 
     if result is None:
         st.info("👈 Run a Forward/Reverse analysis first.")
@@ -2539,7 +2537,7 @@ with tabs[8]:
             _display_enrichment(
                 enr["do"]["top"],
                 enr["do"]["full"],
-                "Disease — CTD / Open Targets (Top 10)",
+                "Disease (Top 10)",
                 empty_msg="No disease terms found for the current gene set.",
                 download_key="download_do",
             )
