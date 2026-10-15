@@ -24,3 +24,9 @@ data_ingest/jnuherb_protein_disease_links.csv
 data_ingest/*.pre_*.bak
 data_ingest/*.backup.json
 build/
+
+# Manuscript drafts and reference PDFs — not part of the software repo
+JNUHERB_SCI_manuscript*.md
+JNUHERB_SCI_manuscript*.pdf
+jnuherb_sci*.md
+herb.pdf
