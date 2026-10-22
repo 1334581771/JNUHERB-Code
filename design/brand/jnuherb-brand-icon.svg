@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" fill="none">
+<title>JNUHERB natural botanical emblem</title>
+<defs>
+<linearGradient id="stem" x1="92" y1="220" x2="161" y2="43" gradientUnits="userSpaceOnUse"><stop stop-color="#577643"/><stop offset=".5" stop-color="#789a45"/><stop offset="1" stop-color="#a2bb61"/></linearGradient>
+<linearGradient id="blade" x1="-13" y1="-6" x2="17" y2="-38" gradientUnits="userSpaceOnUse"><stop stop-color="#355f36"/><stop offset=".36" stop-color="#608843"/><stop offset=".53" stop-color="#a3be6b"/><stop offset=".7" stop-color="#7c9f4d"/><stop offset="1" stop-color="#b1c77c"/></linearGradient>
+<path id="bladeShape" d="M0 0C-7-8-17-17-17-31C-17-43-7-56 1-67C2-54 15-44 16-31C18-17 8-7 0 0Z"/>
+<g id="naturalLeaf">
+<use href="#bladeShape" fill="url(#blade)"/>
+<path d="M0-1C-2-20 2-40 1-62" stroke="#d0d9a0" stroke-width=".85" stroke-linecap="round" opacity=".75"/>
+<g stroke="#c0d18f" stroke-width=".55" stroke-linecap="round" opacity=".55">
+<path d="M0-13L-11-24M0-23L-13-35M1-34L-10-45M1-45L-5-54M0-17L11-29M1-28L12-40M1-39L7-49"/>
+</g>
+<path d="M-12-35C-12-44-5-54 0-61" stroke="#d9dfb4" stroke-width=".65" stroke-linecap="round" opacity=".5"/>
+</g>
+</defs>
+<path d="M73 205C77 216 88 223 96 212C103 202 104 185 112 169C120 150 130 130 138 115C151 91 157 69 160 43" stroke="url(#stem)" stroke-width="4" stroke-linecap="round"/>
+<g stroke="url(#stem)" stroke-width="2" stroke-linecap="round"><path d="M112 169L103 155M119 156L136 150M135 121L124 107M142 108L159 104M100 192L119 183"/></g>
+<use href="#naturalLeaf" transform="translate(158 76) rotate(11) scale(.68 .76)"/>
+<use href="#naturalLeaf" transform="translate(130 118) rotate(-29) scale(.74 .91)"/>
+<use href="#naturalLeaf" transform="translate(151 108) rotate(65) scale(.67 .91)"/>
+<use href="#naturalLeaf" transform="translate(107 165) rotate(-29) scale(.75 .86)"/>
+<use href="#naturalLeaf" transform="translate(130 155) rotate(68) scale(.78 1.02)"/>
+<use href="#naturalLeaf" transform="translate(115 186) rotate(78) scale(.66 .87)"/>
+</svg>

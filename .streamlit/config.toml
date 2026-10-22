@@ -1,8 +1,10 @@
 [theme]
+# Visual tokens follow ui-redesign-proposal/DESIGN-DIRECTION.md:
+# grey-green page background, white content surfaces, deep-green brand.
 primaryColor = "#16634a"
-backgroundColor = "#ffffff"
-secondaryBackgroundColor = "#f2f6f2"
-textColor = "#1f2d2a"
+backgroundColor = "#F5F7F4"
+secondaryBackgroundColor = "#FFFFFF"
+textColor = "#213B32"
 font = "sans serif"
 
 [server]

@@ -70,7 +70,9 @@ RUN pip install --no-cache-dir --user \
     matplotlib>=3.7.0 \
     seaborn>=0.12.0 \
     plotly>=5.14.0 \
-    streamlit>=1.28.0 \
+    # pinned to the dev-tested version; the app relies on st.navigation,
+    # st.logo and st.page_link (>=1.36/1.39) and AppTest-verified behaviour
+    streamlit==1.58.0 \
     gseapy>=1.0.0 \
     requests>=2.28.0 \
     kaleido==0.2.1
