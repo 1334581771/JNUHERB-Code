@@ -131,7 +131,7 @@ class TestResolveDiseaseToTargets:
     def test_chinese_query_translates_then_resolves(self, links_table,
                                                     monkeypatch):
         monkeypatch.setattr("jnuherb.chat.translate_disease_name",
-                            lambda text: "Alzheimer Disease")
+                            lambda text, **_kw: "Alzheimer Disease")
         r = resolve_disease_to_targets("阿尔茨海默病", min_score=0.0)
         assert r["targets"] == ["ENSP00000344456"]
         assert r["disease_name"] == "Alzheimer Disease"
@@ -140,7 +140,7 @@ class TestResolveDiseaseToTargets:
     def test_chinese_query_translation_failure_is_silent(self, links_table,
                                                          monkeypatch):
         monkeypatch.setattr("jnuherb.chat.translate_disease_name",
-                            lambda text: None)
+                            lambda text, **_kw: None)
         r = resolve_disease_to_targets("某种不存在的病")
         assert r["targets"] == [] and r["n_total"] == 0
         assert r["translated_from"] is None
@@ -149,10 +149,39 @@ class TestResolveDiseaseToTargets:
                                                      monkeypatch):
         """A translation that matches nothing yields empty, not an error."""
         monkeypatch.setattr("jnuherb.chat.translate_disease_name",
-                            lambda text: "zzzzz")
+                            lambda text, **_kw: "zzzzz")
         r = resolve_disease_to_targets("某种不存在的病")
         assert r["targets"] == []
         assert r["translated_from"] is None
+
+    def test_disease_id_pin_restricts_to_one_entry(self, monkeypatch):
+        """A name shared by two vocabulary IDs must not mix their targets
+        once the user has disambiguated (P0-4)."""
+        df = pd.DataFrame([
+            ("ENSP00000275493", "EGFR", "MONDO:0008903", "lung cancer",
+             "OT", "direct;ev=100", "0.7181", ""),
+            ("ENSP00000288602", "BRAF", "MONDO:0008903", "lung cancer",
+             "OT", "direct;ev=50", "0.6000", ""),
+            ("ENSP00000344456", "APP", "MESH:D0010", "lung cancer",
+             "CTD", "marker/mechanism", "", "87654321"),
+        ], columns=["Ensembl_ID", "gene_name", "disease_id", "disease_name",
+                    "source", "evidence_type", "score", "pmids"])
+        real = query._load_table
+        monkeypatch.setattr(query, "_load_table",
+                            lambda name: df if name == "jnuherb_protein_disease_links"
+                            else real(name))
+
+        # Unpinned, the resolver sees every same-named entry (CTD curated
+        # rows always pass the score floor).
+        r_mix = resolve_disease_to_targets("lung cancer", min_score=0.1)
+        assert set(r_mix["top_genes"]) == {"EGFR", "BRAF", "APP"}
+
+        # Pinned to the MeSH entry, only APP's rows are used.
+        r_pin = resolve_disease_to_targets("lung cancer", min_score=0.1,
+                                           disease_id="MESH:D0010")
+        assert r_pin["disease_id"] == "MESH:D0010"
+        assert r_pin["top_genes"] == ["APP"]
+        assert r_pin["n_total"] == 1
 
 
 class TestTranslateDiseaseName:

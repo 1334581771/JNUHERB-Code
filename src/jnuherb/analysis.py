@@ -38,6 +38,8 @@ def resolve_disease_to_targets(
     max_targets: int = 200,
     sources: Optional[list[str]] = None,
     translate: bool = True,
+    api_key: Optional[str] = None,
+    disease_id: Optional[str] = None,
 ) -> dict[str, Any]:
     """Resolve a disease name/id to seed target proteins for Reverse mode.
 
@@ -61,6 +63,11 @@ def resolve_disease_to_targets(
         max_targets: Cap on the returned seed target list.
         sources: Restrict to link sources (e.g. ``["OT", "CTD"]``).
         translate: Allow the LLM Chinese→English fallback.
+        api_key: DeepSeek API key for the translation fallback (falls back
+            to env / Streamlit secrets when None).
+        disease_id: When given (disease disambiguation), restrict the
+            lookup to this exact vocabulary ID instead of letting a
+            name match span multiple diseases.
 
     Returns:
         ``{"disease_id", "disease_name", "targets", "n_total",
@@ -68,18 +75,28 @@ def resolve_disease_to_targets(
         empty when the disease is unknown; ``translated_from`` is the
         original Chinese query when a translation was used, else None.
     """
-    links = get_protein_disease_links(by_disease=disease, min_score=min_score,
+    # With a disambiguated pick, query by the exact vocabulary ID — the
+    # by_disease name filter only matches whole names, so a short name
+    # like "stroke" would never reach its "stroke disorder" entry.
+    lookup = disease_id if disease_id is not None else disease
+    links = get_protein_disease_links(by_disease=lookup, min_score=min_score,
                                       sources=sources)
+    if disease_id is not None:
+        # Belt-and-braces: keep only the chosen vocabulary entry so a
+        # name match never mixes targets from several same-named diseases.
+        links = links[links["disease_id"] == disease_id]
     translated_from: Optional[str] = None
     if links.empty and translate and _CJK_RE.search(disease):
         # Lazy import: keeps chat.py (and its LLM deps) out of the
         # import graph unless a Chinese query actually needs it.
         from jnuherb.chat import translate_disease_name
 
-        en = translate_disease_name(disease)
+        en = translate_disease_name(disease, api_key=api_key)
         if en:
             tlinks = get_protein_disease_links(
                 by_disease=en, min_score=min_score, sources=sources)
+            if disease_id is not None:
+                tlinks = tlinks[tlinks["disease_id"] == disease_id]
             if not tlinks.empty:
                 links = tlinks
                 translated_from = disease

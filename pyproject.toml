@@ -58,7 +58,7 @@ docking = [
 where = ["src"]
 
 [tool.setuptools.package-data]
-jnuherb = ["data/*.csv", "data/*.csv.gz", "data/*.db", "data/*.json", "data/enrichment/*.gmt", "data/fonts/*.otf", "data/fonts/*.ttf", "data/ensembl_uniprot.csv"]
+jnuherb = ["data/*.csv", "data/*.csv.gz", "data/*.db", "data/*.json", "data/assets/*.png", "data/enrichment/*.gmt", "data/fonts/*.otf", "data/fonts/*.ttf", "data/ensembl_uniprot.csv"]
 
 [project.scripts]
 jnuherb = "jnuherb.app:main"

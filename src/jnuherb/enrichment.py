@@ -106,6 +106,7 @@ def _safe_enrich(
 
 def run_enrichment(
     gene_list: list[str],
+    which: str = "all",
 ) -> dict[str, dict]:
     """Run offline KEGG, GO (BP/CC/MF) and disease enrichment on a gene list.
 
@@ -113,6 +114,11 @@ def run_enrichment(
     ----------
     gene_list:
         List of gene symbols.
+    which:
+        ``"all"`` computes every collection (default, backward compatible).
+        ``"kegg"``, ``"go"`` or ``"disease"`` computes only that collection
+        so the UI can run enrichment lazily per selected tab instead of
+        computing all three on every page view.
 
     Returns
     -------
@@ -121,49 +127,56 @@ def run_enrichment(
     ``n_input`` and ``n_mapped``.
     ``go`` contains the same keys, where ``full`` / ``top`` combine
     BP/CC/MF with an additional ``Category`` column.
+    Collections not requested by ``which`` come back empty.
     """
     genes = [g.strip() for g in gene_list if g and str(g).strip()]
     empty = {"full": pd.DataFrame(), "top": pd.DataFrame(), "n_input": 0, "n_mapped": 0}
+    out: dict[str, dict] = {"kegg": empty.copy(), "go": empty.copy(), "do": empty.copy()}
     if not genes:
-        return {"kegg": empty.copy(), "go": empty.copy(), "do": empty.copy()}
+        return out
+    if which not in {"all", "kegg", "go", "disease"}:
+        raise ValueError(f"Invalid which='{which}'; use all/kegg/go/disease.")
 
     # KEGG
-    kegg_full, kegg_n_in, kegg_n_map = _safe_enrich(genes, _gmt_path(_GMT_FILES["kegg"]), "KEGG")
-    kegg_top = kegg_full.head(10)
+    if which in ("all", "kegg"):
+        kegg_full, kegg_n_in, kegg_n_map = _safe_enrich(genes, _gmt_path(_GMT_FILES["kegg"]), "KEGG")
+        out["kegg"] = {"full": kegg_full, "top": kegg_full.head(10),
+                       "n_input": kegg_n_in, "n_mapped": kegg_n_map}
 
     # GO: combine BP/CC/MF
-    go_parts = []
-    go_n_in, go_n_map = 0, 0
-    for sub, label in [
-        ("go_bp", "BP"),
-        ("go_cc", "CC"),
-        ("go_mf", "MF"),
-    ]:
-        part, n_in, n_map = _safe_enrich(genes, _gmt_path(_GMT_FILES[sub]), label)
-        go_parts.append(part)
-        go_n_in = max(go_n_in, n_in)
-        go_n_map = max(go_n_map, n_map)
+    if which in ("all", "go"):
+        go_parts = []
+        go_n_in, go_n_map = 0, 0
+        for sub, label in [
+            ("go_bp", "BP"),
+            ("go_cc", "CC"),
+            ("go_mf", "MF"),
+        ]:
+            part, n_in, n_map = _safe_enrich(genes, _gmt_path(_GMT_FILES[sub]), label)
+            go_parts.append(part)
+            go_n_in = max(go_n_in, n_in)
+            go_n_map = max(go_n_map, n_map)
 
-    if go_parts:
-        go_full = pd.concat(go_parts, ignore_index=True).sort_values("P-value").reset_index(drop=True)
-        # Top 3 per category, preserving overall P-value order within each
-        go_top = pd.concat([
-            go_full[go_full["Category"] == cat].head(3)
-            for cat in ["BP", "CC", "MF"]
-        ]).sort_values(["Category", "P-value"]).reset_index(drop=True)
-    else:
-        go_full = pd.DataFrame()
-        go_top = pd.DataFrame()
+        if go_parts:
+            go_full = pd.concat(go_parts, ignore_index=True).sort_values("P-value").reset_index(drop=True)
+            # Top 3 per category, preserving overall P-value order within each
+            go_top = pd.concat([
+                go_full[go_full["Category"] == cat].head(3)
+                for cat in ["BP", "CC", "MF"]
+            ]).sort_values(["Category", "P-value"]).reset_index(drop=True)
+        else:
+            go_full = pd.DataFrame()
+            go_top = pd.DataFrame()
+        out["go"] = {"full": go_full, "top": go_top,
+                     "n_input": go_n_in, "n_mapped": go_n_map}
 
     # Disease (CTD / Open Targets gene sets)
-    do_full, do_n_in, do_n_map = _safe_enrich(genes, _gmt_path(_GMT_FILES["do"]), "Disease")
-    do_top = do_full.head(10)
+    if which in ("all", "disease"):
+        do_full, do_n_in, do_n_map = _safe_enrich(genes, _gmt_path(_GMT_FILES["do"]), "Disease")
+        out["do"] = {"full": do_full, "top": do_full.head(10),
+                     "n_input": do_n_in, "n_mapped": do_n_map}
 
-    return {
-        "kegg": {"full": kegg_full, "top": kegg_top, "n_input": kegg_n_in, "n_mapped": kegg_n_map},
-        "go": {"full": go_full, "top": go_top, "n_input": go_n_in, "n_mapped": go_n_map},
-        "do": {"full": do_full, "top": do_top, "n_input": do_n_in, "n_mapped": do_n_map},
-    }
+    return out
 
 
 def extract_genes_from_result(result: Optional[dict]) -> list[str]:

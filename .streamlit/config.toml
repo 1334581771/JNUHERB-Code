@@ -1,31 +1,9 @@
-[server]
-# JNUHERB Streamlit server configuration
-maxUploadSize = 50
-enableXsrfProtection = true
-enableCORS = true
-runOnSave = false
-
-# Headless mode for Docker / production deployments
-headless = true
-
-[browser]
-gatherUsageStats = false
-serverAddress = "0.0.0.0"
-
-[client]
-# Hide the default Streamlit toolbar items (Deploy, Rerun, Auto rerun, Clear cache, Print, Record screen)
-toolbarMode = "viewer"
-showErrorDetails = false
-showSidebarNavigation = true
-
 [theme]
-# "Herbal medicine + academic" palette: deep herbal green primary, warm
-# paper-white background, cinnabar accents come from buttons/alerts.
-primaryColor = "#2e7d5b"
-backgroundColor = "#faf9f6"
-secondaryBackgroundColor = "#ffffff"
-textColor = "#2c3e50"
+primaryColor = "#16634a"
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#f2f6f2"
+textColor = "#1f2d2a"
 font = "sans serif"
 
-[logger]
-level = "info"
+[server]
+maxUploadSize = 200
