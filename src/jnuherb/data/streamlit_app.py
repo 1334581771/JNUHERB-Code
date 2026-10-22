@@ -15,10 +15,14 @@ Launch via::
 
 from __future__ import annotations
 
+import base64
 import concurrent.futures
 import fcntl
+import json
 import os
 import tempfile
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -63,74 +67,246 @@ footer {visibility: hidden;}
 
 /* ---- Brand: hero banner ---- */
 .jnu-hero {
-    background: linear-gradient(135deg, #1f5c46 0%, #2e7d5b 60%, #3d9970 100%);
-    border-radius: 14px;
-    padding: 2.2rem 2.4rem 1.8rem 2.4rem;
+    background: linear-gradient(120deg, #0f4a37 0%, #16634a 55%, #1e7a5a 100%);
+    border-radius: 16px;
+    padding: 2.4rem 2.6rem 1.6rem;
     color: #ffffff;
     margin-bottom: 1.2rem;
 }
 .jnu-hero-title {
-    font-size: 2.4rem;
+    font-size: 2.1rem;
     font-weight: 800;
-    letter-spacing: 0.02em;
-    line-height: 1.1;
+    letter-spacing: 0.01em;
+    line-height: 1.15;
 }
 .jnu-hero-sub {
-    font-size: 1.02rem;
-    opacity: 0.92;
-    margin-top: 0.5rem;
-    max-width: 46rem;
+    font-size: 1.0rem;
+    opacity: 0.88;
+    margin-top: 0.6rem;
+    line-height: 1.5;
 }
-.jnu-hero-stats {
-    margin-top: 1.1rem;
-    font-size: 0.92rem;
-    opacity: 0.95;
+.jnu-hero-icons {
+    display: flex;
+    justify-content: space-between;
+    align-items: stretch;
+    gap: 0.4rem;
+    margin-top: 1.8rem;
 }
-.jnu-hero-stats b {
-    font-size: 1.15rem;
+.jnu-hero-ent {
+    text-align: center;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-end;
+}
+.jnu-hero-ent img {
+    height: 104px;
+    max-width: 100%;
+    object-fit: contain;
+    filter: drop-shadow(0 6px 14px rgba(0,0,0,0.28));
+}
+.jnu-hero-ent-num {
+    margin-top: 0.55rem;
+    font-size: 1.0rem;
+    font-weight: 800;
+    letter-spacing: 0.02em;
+}
+.jnu-hero-ent-lbl {
+    font-size: 1.0rem;
+    font-weight: 500;
+    letter-spacing: 0.04em;
+    opacity: 0.85;
+    margin-top: 0.1rem;
+}
+.jnu-hero-arrow {
+    align-self: center;
+    font-size: 2.6rem;
     font-weight: 700;
+    line-height: 1;
+    opacity: 0.8;
+    flex: 0 0 auto;
+    padding-bottom: 2.6rem;
+    user-select: none;
+    letter-spacing: -0.1em;
+    transform: scaleX(1.35);
 }
-.jnu-hero-stats .jnu-stat {
-    display: inline-block;
-    margin-right: 1.4rem;
-}
+.jnu-hero-stats { display: none; }
 
-/* ---- Brand: entry cards ---- */
+/* ---- Workflow section + cards ---- */
+.jnu-workflow-h2 {
+    font-size: 1.0rem;
+    font-weight: 800;
+    color: #173e34;
+    margin: 1.2rem 0 0.2rem;
+}
+.jnu-workflow-sub {
+    font-size: 1.0rem;
+    color: #6b7d75;
+    margin-bottom: 0.9rem;
+}
 .jnu-card-grid {
     display: grid;
     grid-template-columns: repeat(2, 1fr);
-    gap: 1rem;
+    gap: 1.1rem;
     grid-auto-rows: 1fr;
-    margin-bottom: 0.4rem;
+    margin-bottom: 0.6rem;
 }
-@media (max-width: 640px) {
+@media (max-width: 760px) {
     .jnu-card-grid { grid-template-columns: 1fr; }
+    .jnu-hero-ent img { height: 60px; }
+    .jnu-hero-ent-num { font-size: 0.95rem; }
+    .jnu-hero-ent-lbl { font-size: 0.95rem; }
+    .jnu-hero-arrow { font-size: 1.8rem; padding-bottom: 2.2rem; }
+}
+a.jnu-card {
+    color: inherit;
+    text-decoration: none;
+    display: flex;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+a.jnu-card:hover {
+    border-color: #2e7d5b;
+    box-shadow: 0 4px 14px rgba(22, 99, 74, 0.14);
 }
 .jnu-card {
-    border: 1px solid #e3e0d8;
-    border-radius: 12px;
-    padding: 1.2rem 1.3rem;
+    border: 1px solid #e3e9e3;
+    border-radius: 14px;
+    padding: 1.3rem 1.4rem 1.1rem;
     background: #ffffff;
     height: 100%;
+    display: flex;
+    flex-direction: column;
 }
-.jnu-card h3 {
-    margin: 0 0 0.4rem 0;
-    font-size: 1.12rem;
-    color: #1f5c46;
+.jnu-card-head {
+    font-size: 1.0rem;
+    font-weight: 800;
+    color: #173e34;
 }
-.jnu-card p {
-    margin: 0.25rem 0;
-    font-size: 0.92rem;
-    color: #4a5568;
-}
-.jnu-card .jnu-card-arrow {
-    font-size: 1.05rem;
+.jnu-card-flow {
+    font-size: 1.0rem;
+    font-weight: 700;
     color: #2e7d5b;
+    margin: 0.25rem 0 0.5rem;
+}
+.jnu-card-desc {
+    margin: 0;
+    font-size: 1.0rem;
+    color: #3f4f4a;
+    line-height: 1.5;
+}
+.jnu-card-hint {
+    margin: 0.35rem 0 0;
+    font-size: 1.0rem;
+    color: #8a988f;
+}
+.jnu-card-foot {
+    margin-top: auto;
+    padding-top: 0.9rem;
+    display: flex;
+    justify-content: flex-end;
+}
+.jnu-card-img {
+    height: 104px;
+    max-width: 60%;
+    object-fit: contain;
+}
+.jnu-card p { margin: 0.25rem 0; font-size: 1.0rem; color: #4a5568; }
+.jnu-card h3 { margin: 0 0 0.4rem 0; font-size: 1.0rem; color: #1f5c46; }
+.jnu-card .jnu-card-arrow { font-size: 1.0rem; color: #2e7d5b; font-weight: 600; }
+
+/* ---- Verified examples band ---- */
+.jnu-examples-band {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    flex-wrap: wrap;
+    background: #f2f6f2;
+    border: 1px solid #e3e9e3;
+    border-radius: 12px;
+    padding: 0.8rem 1.2rem;
+    margin: 0.8rem 0 1.2rem;
+}
+.jnu-examples-lbl {
+    font-size: 1.0rem;
+    font-weight: 700;
+    color: #173e34;
+    white-space: nowrap;
+}
+.jnu-examples-chips { display: flex; gap: 0.6rem; flex-wrap: wrap; }
+.jnu-chip {
+    font-size: 1.0rem;
+    background: #ffffff;
+    border: 1px solid #d8e2da;
+    border-radius: 999px;
+    padding: 0.3rem 0.9rem;
+    color: #16634a;
     font-weight: 600;
+    text-decoration: none;
+    white-space: nowrap;
 }
 </style>
 """
 st.markdown(_HIDE_STYLES, unsafe_allow_html=True)
+
+# ---------------------------------------------------------------------------
+# Example workflows (verified cases) — prefill machinery
+# ---------------------------------------------------------------------------
+
+def _apply_pending_prefill() -> None:
+    """Apply a queued example/preset BEFORE any widget is instantiated.
+
+    Streamlit raises if a widget's session-state key is written after the
+    widget exists, so pending prefill values are applied here, at the very
+    top of the script.
+    """
+    pend = st.session_state.pop("pending_prefill", None)
+    if not pend:
+        return
+    if pend.get("mode"):
+        st.session_state["analysis_mode_sel"] = pend["mode"]
+    for k, v in pend.get("widgets", {}).items():
+        st.session_state[k] = v
+    if "reverse_disease" in pend.get("widgets", {}):
+        # A stale disambiguation pick must not survive a new disease query.
+        st.session_state.pop("reverse_disease_pick", None)
+        st.session_state.pop("reverse_disease_id", None)
+
+
+_apply_pending_prefill()
+
+
+@st.dialog("🧪 Try an example", width="small")
+def _example_dialog() -> None:
+    """Verified example workflows; inputs/params prefilled, never auto-run."""
+    st.caption(
+        "Verified example workflows. Inputs and parameters are prefilled — "
+        "press **🚀 Run Analysis** in the sidebar to reproduce."
+    )
+    if st.button("🍵 Gui Pi Decoction · Forward (HVP5811, score ≥ 900)",
+                 use_container_width=True):
+        st.session_state.pending_prefill = {
+            "mode": "🚀 Forward",
+            "widgets": {"forward_entity_type": "Formula (方剂)",
+                        "forward_text_fml": "HVP5811"},
+        }
+        st.rerun()
+    if st.button("🫁 Lung cancer · Reverse (MONDO:0008903, score ≥ 0.1, "
+                 "top 30, combined ≥ 900)", use_container_width=True):
+        st.session_state.pending_prefill = {
+            "mode": "🎯 Reverse",
+            "widgets": {"reverse_disease": "MONDO:0008903",
+                        "reverse_disease_score": 0.10,
+                        "reverse_disease_topn": 30,
+                        "reverse_score": 900},
+        }
+        st.rerun()
+    if st.button("😴 Insomnia · AI consultation (症状已填入 💬 AI 页)",
+                 use_container_width=True):
+        st.session_state.pending_prefill = {
+            "widgets": {"ai_symptoms": "失眠多梦，心悸健忘，神疲乏力，舌淡苔薄"},
+        }
+        st.rerun()
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -974,11 +1150,25 @@ st.sidebar.markdown("---")
 # def placed below its call site is not yet bound when that code runs
 # (NameError: name '_resolve_disease' is not defined).
 @st.cache_data(show_spinner="Resolving disease targets...")
-def _resolve_disease(disease: str, min_score: float, max_targets: int) -> dict | None:
-    """Disease name/id → seed Ensembl protein IDs (CTD / Open Targets)."""
+def _resolve_disease(disease: str, min_score: float, max_targets: int,
+                     disease_id: Optional[str] = None,
+                     api_key: Optional[str] = None) -> dict | None:
+    """Disease name/id → seed Ensembl protein IDs (CTD / Open Targets).
+
+    ``disease_id`` pins the lookup to one vocabulary entry when the name
+    matches several diseases (see the disambiguation selectbox below).
+    """
     from jnuherb.analysis import resolve_disease_to_targets
     return resolve_disease_to_targets(disease, min_score=min_score,
-                                      max_targets=max_targets)
+                                      max_targets=max_targets,
+                                      disease_id=disease_id, api_key=api_key)
+
+
+# Per-session output isolation (P0): every browser session gets its own
+# run directory (session_uuid/run_id), so concurrent users can never read
+# or overwrite each other's downloads, figures, or docking outputs.
+if "_session_uuid" not in st.session_state:
+    st.session_state._session_uuid = uuid.uuid4().hex[:12]
 
 
 if is_forward:
@@ -1080,9 +1270,36 @@ else:
             key="reverse_disease_topn",
         )
         try:
+            # P0-4 disease disambiguation: a name can match several disease
+            # IDs across vocabularies (e.g. "stroke" in MONDO and MeSH).
+            # List the candidates and let the user pin one exact ID before
+            # any target mixing can happen.
+            from jnuherb.query import get_diseases
+
+            _cands = get_diseases(reverse_disease.strip())
+            _picked_id = None
+            if len(_cands) > 1:
+                _opts = [
+                    f"{r.disease_name} ({r.disease_id} · {int(r.n_links)} targets)"
+                    for r in _cands.itertuples()
+                ]
+                _sel = st.sidebar.selectbox(
+                    "Multiple diseases match — select one:",
+                    _opts, key="reverse_disease_pick",
+                    help="The same name can refer to different vocabulary "
+                         "entries. Targets are resolved only for the "
+                         "selected ID.",
+                )
+                _picked_id = _cands.iloc[_opts.index(_sel)]["disease_id"]
+            elif len(_cands) == 1:
+                _picked_id = _cands.iloc[0]["disease_id"]
+            st.session_state["reverse_disease_id"] = _picked_id
+
             _resolved = _resolve_disease(reverse_disease.strip(),
                                          float(reverse_disease_score),
-                                         int(reverse_disease_topn))
+                                         int(reverse_disease_topn),
+                                         disease_id=_picked_id,
+                                         api_key=st.session_state.get("deepseek_api_key"))
         except Exception as e:  # noqa: BLE001
             _resolved = None
             st.sidebar.warning(f"Disease lookup unavailable: {e}")
@@ -1515,10 +1732,24 @@ if run_btn:
     else:
         st.session_state.running = True
         st.session_state.pop("result", None)
-        st.session_state.pop("enr_results", None)
+        st.session_state.pop("enr_results", None)  # legacy key (pre-merge)
+        for _k in ("enr_disease", "enr_kegg", "enr_go"):
+            st.session_state.pop(_k, None)
 
-        output_dir = Path(tempfile.gettempdir()) / "jnuherb_streamlit"
+        run_id = uuid.uuid4().hex[:12]
+        output_dir = (Path(tempfile.gettempdir()) / "jnuherb_runs"
+                      / st.session_state._session_uuid / f"run_{run_id}")
         output_dir.mkdir(parents=True, exist_ok=True)
+        # Run provenance: inputs/params are filled in per branch below and
+        # dumped to run_manifest.json in the `finally` block either way.
+        run_meta: dict = {
+            "run_id": run_id,
+            "mode": "forward" if is_forward else "reverse",
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "output_dir": str(output_dir),
+            "dataset_manifest": "jnuherb/data/dataset_manifest.json",
+            "input": None, "parameters": None, "status": "failed",
+        }
 
         lock_fd = None
         try:
@@ -1536,6 +1767,10 @@ if run_btn:
                 # --- Formula Name: resolve before cache ---
                 entities_for_cache = entities
                 id_type_for_cache = forward_id_type
+                if id_type_for_cache == "HVPID":
+                    # from_tcm_or_formula only accepts HVMID-family id_types;
+                    # an "HVP" prefix is auto-detected as a formula there.
+                    id_type_for_cache = "HVMID"
 
                 if forward_id_type == "Formula Name":
                     from jnuherb._data import _load_table
@@ -1610,6 +1845,15 @@ if run_btn:
                     st.error("Please enter at most 50 filter proteins.")
                     raise _AnalysisInputError()
 
+                run_meta["input"] = list(entities_for_cache)
+                run_meta["parameters"] = {
+                    "id_type": id_type_for_cache,
+                    "score": float(forward_score),
+                    "num": int(opt_num),
+                    "random_state": int(opt_seed),
+                    "filter_proteins": prot_filter or None,
+                }
+
                 with st.spinner("Running forward analysis (timeout 360s)..."):
                     st.session_state.result = _run_with_timeout(
                         _run_forward,
@@ -1624,6 +1868,7 @@ if run_btn:
                         fml_comp=False,
                         output_dir=str(output_dir),
                     )
+                run_meta["status"] = "success"
             else:
                 # Disease-seeded run takes precedence over manual proteins.
                 disease_query = st.session_state.get("reverse_disease", "").strip()
@@ -1634,6 +1879,8 @@ if run_btn:
                             disease_query,
                             float(st.session_state.get("reverse_disease_score", 0.10)),
                             int(st.session_state.get("reverse_disease_topn", 30)),
+                            disease_id=st.session_state.get("reverse_disease_id"),
+                            api_key=st.session_state.get("deepseek_api_key"),
                         )
                     except Exception as e:  # noqa: BLE001
                         st.error(f"Disease lookup failed: {e}")
@@ -1675,13 +1922,38 @@ if run_btn:
                     st.error("Please enter at most 30 filter formulas.")
                     raise _AnalysisInputError()
 
+                # P0-3: disease-seeded targets are always Ensembl protein
+                # IDs from the link table — never the user's selectbox
+                # choice, which only applies to the manual-protein branch.
+                protein_id_type_for_run = (
+                    "Ensembl_ID" if (resolved and resolved["targets"])
+                    else reverse_id_type
+                )
+
+                run_meta["input"] = {
+                    "disease": disease_query or None,
+                    "disease_id": (resolved or {}).get("disease_id") or None,
+                    "proteins": None if (resolved and resolved["targets"])
+                                else list(proteins),
+                }
+                run_meta["parameters"] = {
+                    "protein_id_type": protein_id_type_for_run,
+                    "formula_id_type": formula_id_type,
+                    "score": float(reverse_score),
+                    "num": int(opt_num),
+                    "random_state": int(opt_seed),
+                    "tcm_comp": bool(tcm_opt_enabled),
+                    "fml_comp": bool(fml_opt_enabled),
+                    "filter_formulas": fml_list or None,
+                }
+
                 with st.spinner("Running reverse analysis (timeout 360s)..."):
                     st.session_state.result = _run_with_timeout(
                         _run_reverse,
                         ANALYSIS_TIMEOUT_SECONDS,
                         proteins_tuple=tuple(proteins),
                         formula_tuple=tuple(fml_list) if fml_list else None,
-                        protein_id_type=reverse_id_type,
+                        protein_id_type=protein_id_type_for_run,
                         formula_id_type=formula_id_type,
                         score=float(reverse_score),
                         num=int(opt_num),
@@ -1690,19 +1962,35 @@ if run_btn:
                         fml_comp=fml_opt_enabled,
                         output_dir=str(output_dir),
                     )
+                run_meta["status"] = "success"
         except _AnalysisInputError:
             pass  # Error message already displayed above
         except _AnalysisDataError as e:
             st.error(f"{e}")
+            run_meta["error"] = str(e)
         except TimeoutError as e:
             st.error(f"⏱️ {e}")
+            run_meta["error"] = str(e)
         except RuntimeError as e:
             st.error(f"🚦 {e}")
+            run_meta["error"] = str(e)
         except Exception as e:
             st.error(f"❌ Analysis failed: {e}")
+            run_meta["error"] = f"{type(e).__name__}: {e}"
         finally:
             if lock_fd is not None:
                 _release_analysis_lock(lock_fd)
+            # Persist run provenance (inputs, parameters, status) next to
+            # the run's own outputs. Never log API keys.
+            try:
+                with open(output_dir / "run_manifest.json", "w") as _mf:
+                    json.dump(run_meta, _mf, ensure_ascii=False, indent=2)
+            except Exception:  # noqa: BLE001
+                pass
+            if run_meta.get("status") == "success":
+                # Keep the summary for the Overview tab; cleared on the
+                # next run by the pops above.
+                st.session_state.run_info = run_meta
             st.session_state.running = False
             st.rerun()
 
@@ -1789,12 +2077,32 @@ tabs = st.tabs([
     "🔗 Network",
     "🔍 Formula Filter",
     "📊 Degree",
-    "🧬 DO",
-    "🧬 KEGG",
-    "🧬 GO",
+    "🧬 Enrichment",
     "⚙️ Optimization",
     "🧪 Docking",
 ])
+
+# Deep-link support for the Overview workflow cards: they link to
+# ?tab=<emoji>, and this zero-height iframe clicks the matching tab button
+# in the parent document and removes the query param. No-op when absent.
+st.iframe(
+    src="""<script>
+try {
+  var q = new URLSearchParams(window.parent.location.search).get("tab");
+  if (q) {
+    var btns = Array.from(window.parent.document.querySelectorAll(
+      'div[role="tablist"] button, div[data-baseweb="tab-list"] button'));
+    var t = btns.find(function (b) { return b.textContent.indexOf(q) !== -1; });
+    if (t) { t.click(); }
+    var u = new URL(window.parent.location);
+    u.searchParams.delete("tab");
+    window.parent.history.replaceState(null, "", u);
+  }
+} catch (e) {}
+</script>
+""",
+    height=1,
+)
 
 result = st.session_state.get("result")
 is_fwd = result.get("is_forward", False) if result else False
@@ -1802,70 +2110,150 @@ is_fwd = result.get("is_forward", False) if result else False
 # ---- Tab 1: Overview ----
 with tabs[0]:
     if result is None:
-        st.markdown("""
+        # ---- six-entity hero row with arrows and per-icon stat captions ----
+        try:
+            from importlib.resources import files
+            import json as _json
+            _man = _json.loads(
+                files("jnuherb.data").joinpath("dataset_manifest.json").read_text("utf-8"))
+            _ent = _man["entity_counts"]
+        except Exception:  # noqa: BLE001 - never break the page for stats
+            _ent = {}
+
+        _hero_icons = [
+            ("tcm-syndrome-meridians.png", "Syndromes",
+             _ent.get("syndrome_terms", {}).get("unique")),
+            ("disease-medical-record.png", "Diseases",
+             _ent.get("disease_terms", {}).get("unique")),
+            ("herbal-formula-transparent.png", "Formulas",
+             _ent.get("formulas", {}).get("unique")),
+            ("medicinal-herb-plant.png", "Herbs",
+             _ent.get("herbs", {}).get("unique")),
+            ("ingredient-molecule.png", "Ingredients",
+             _ent.get("ingredients", {}).get("unique")),
+            ("protein-folded-chain.png", "Proteins",
+             _ent.get("proteins", {}).get("unique")),
+        ]
+        _icons_html = ""
+        try:
+            from PIL import Image as _PILImage
+            import io as _io
+            _assets = files("jnuherb.data.assets")
+            for _i, (_fname, _lbl, _n) in enumerate(_hero_icons):
+                _p = _assets.joinpath(_fname)
+                if not _p.is_file():
+                    continue
+                _raw = _p.read_bytes()
+                try:
+                    _im = _PILImage.open(_io.BytesIO(_raw)).convert("RGBA")
+                    if _im.height > 260:
+                        _w = int(_im.width * 260 / _im.height)
+                        _im = _im.resize((_w, 260), _PILImage.LANCZOS)
+                    _buf = _io.BytesIO()
+                    _im.save(_buf, "PNG", optimize=True)
+                    _raw = _buf.getvalue()
+                except Exception:  # noqa: BLE001 - fall back to original bytes
+                    pass
+                _b64 = base64.b64encode(_raw).decode()
+                _num_html = (f'<div class="jnu-hero-ent-num">{_n:,}</div>'
+                             if _n is not None else "")
+                _icons_html += (
+                    f'<div class="jnu-hero-ent"><img alt="{_lbl}" '
+                    f'src="data:image/png;base64,{_b64}"/>'
+                    f"{_num_html}"
+                    f'<div class="jnu-hero-ent-lbl">{_lbl}</div></div>')
+                if _i < len(_hero_icons) - 1:
+                    _icons_html += '<div class="jnu-hero-arrow">↔</div>'
+        except Exception:  # noqa: BLE001 - icons are decorative
+            pass
+        _icons_row = (f'<div class="jnu-hero-icons">{_icons_html}</div>'
+                      if _icons_html else "")
+
+        st.markdown(f"""
         <div class="jnu-hero">
-          <div class="jnu-hero-title">🌿 JNUHERB</div>
-          <div class="jnu-hero-sub">
-            JNUHERB is an integrated web server for traditional Chinese medicine
-            research, unifying AI-assisted syndrome differentiation, bidirectional
-            (forward and reverse) network pharmacology, disease-anchored target
-            discovery, TCM compatibility optimization, and
-            molecular-docking-based virtual screening in a single platform.
-          </div>
-          <div class="jnu-hero-stats">
-            <span class="jnu-stat"><b>2,000+</b> syndromes</span>
-            <span class="jnu-stat"><b>12,000+</b> diseases</span>
-            <span class="jnu-stat"><b>12,500+</b> formulas</span>
-            <span class="jnu-stat"><b>4,700+</b> herbs</span>
-            <span class="jnu-stat"><b>13,100+</b> chemicals</span>
-            <span class="jnu-stat"><b>14,200+</b> proteins</span>
-          </div>
+          <div class="jnu-hero-title">🌿 JNUHERB：An integrated platform for
+            traditional Chinese medicine research</div>
+          <div class="jnu-hero-sub">Connecting syndromes, diseases, formulas,
+            herbs, ingredients, and protein targets — charting the clear
+            next step for your research.</div>
+          {_icons_row}
         </div>
         """, unsafe_allow_html=True)
 
-        st.markdown("""
-        <div class="jnu-card-grid">
-          <div class="jnu-card">
-            <h3>🤖 AI &nbsp;<span class="jnu-card-arrow">Symptoms → TCMs</span></h3>
-            <p>Describe symptoms in natural language; the AI retrieves candidate
-               herbs and formulas from enriched syndrome and indication data.</p>
-            <p><b>When to use:</b> TCM syndrome interpretation and
-               evidence-guided prescription discovery.</p>
-            <p><b>Example:</b> <code>I have a headache and fever</code> · <code>头痛发热</code></p>
-          </div>
-          <div class="jnu-card">
-            <h3>🚀 Bidirectional &nbsp;<span class="jnu-card-arrow">Disease ↔ TCMs</span></h3>
-            <p><b>Forward:</b> start from herbs, formulas or monomer ingredients
-               and map them to protein targets and pathways.
-               <b>Reverse:</b> start from a disease (or its target proteins)
-               and discover candidate herbs, formulas and active ingredients.</p>
-            <p><b>When to use:</b> mechanism elucidation, target-driven drug
-               discovery, drug repositioning.</p>
-            <p><b>Example:</b> <code>柴胡, 黄芩</code> · <code>hypertension</code>
-               · <code>TNF, IL6, TP53</code></p>
-          </div>
-          <div class="jnu-card">
-            <h3>🧩 Optimization &nbsp;<span class="jnu-card-arrow">Disease → Formula</span></h3>
-            <p>Combine the herbs or monomers shortlisted from a disease /
-               reverse / forward analysis into an optimized compatible
-               prescription under a capacity budget, ranked by
-               probability-union HerbiV scoring.</p>
-            <p><b>When to use:</b> TCM compatibility design from
-               reverse or forward analysis hits.</p>
-            <p><b>Example:</b> optimize the herbs returned by an AI,
-               disease or reverse query.</p>
-          </div>
-          <div class="jnu-card">
-            <h3>🔬 Virtual Screening &nbsp;<span class="jnu-card-arrow">Ligand → Protein</span></h3>
-            <p>Dock a candidate ingredient against a target protein with
-               AutoDock Vina; define the binding box by residue number or
-               manually.</p>
-            <p><b>When to use:</b> rapid ranking of active ingredients and
-               binding hypothesis generation.</p>
-            <p><b>Output:</b> Vina score + interactive 3D complex (PDB download).</p>
-          </div>
+        _cards = [
+            ("🤖", "AI-assisted consultation", "Symptoms → TCMs",
+             "Find candidate herbs and formulas from symptom descriptions.",
+             "Symptoms → Syndrome → Candidates",
+             "ai-consultation.png", "💬"),
+            ("🔗", "Network pharmacology", "Disease ↔ TCMs",
+             "Trace relationships between herbs, ingredients and target "
+             "proteins — forward and disease/target-driven reverse analysis.",
+             "Forward and reverse network analysis",
+             "network-pharmacology.png", "🔗"),
+            ("🧩", "Combination optimization", "Disease → Formula",
+             "Rank herb and formula combinations from reverse-analysis results.",
+             "Combo score relative to the best constituent",
+             "combination-optimization.png", "⚙️"),
+            ("🧪", "Molecular docking", "Ligand → Protein",
+             "Prepare and dock one ligand against a selected receptor.",
+             "AutoDock Vina · 3D view · complex PDB",
+             "molecular-docking.png", "🧪"),
+        ]
+        _card_cells = ""
+        try:
+            _assets = files("jnuherb.data.assets")
+            for _emo, _h, _flow, _desc, _hint, _img, _tab in _cards:
+                _p = _assets.joinpath(_img)
+                _img_html = ""
+                if _p.is_file():
+                    _raw = _p.read_bytes()
+                    try:
+                        from PIL import Image as _PILImage
+                        import io as _io
+                        _im = _PILImage.open(_io.BytesIO(_raw)).convert("RGBA")
+                        if _im.width > 640:
+                            _h2 = int(_im.height * 640 / _im.width)
+                            _im = _im.resize((640, _h2), _PILImage.LANCZOS)
+                        _buf = _io.BytesIO()
+                        _im.save(_buf, "PNG", optimize=True)
+                        _raw = _buf.getvalue()
+                    except Exception:  # noqa: BLE001 - use original bytes
+                        pass
+                    _b64 = base64.b64encode(_raw).decode()
+                    _img_html = (
+                        f'<img class="jnu-card-img" alt="" '
+                        f'src="data:image/png;base64,{_b64}"/>')
+                _card_cells += f"""
+          <a class="jnu-card" href="?tab={_tab}">
+            <div class="jnu-card-head">{_emo}&nbsp;{_h}</div>
+            <div class="jnu-card-flow">{_flow}</div>
+            <p class="jnu-card-desc">{_desc}</p>
+            <p class="jnu-card-hint">{_hint}</p>
+            <div class="jnu-card-foot">{_img_html}</div>
+          </a>"""
+        except Exception:  # noqa: BLE001
+            pass
+
+        st.markdown(f"""
+        <div class="jnu-workflow-h2">Choose your workflow</div>
+        <div class="jnu-workflow-sub">Start from symptoms, herbs, formulas,
+          ingredients, diseases or targets.</div>
+        <div class="jnu-card-grid">{_card_cells}
         </div>
         """, unsafe_allow_html=True)
+
+        st.markdown(f"""
+        <div class="jnu-examples-band">
+          <span class="jnu-examples-lbl">🧪 Verified example workflows</span>
+          <span class="jnu-examples-chips">
+            <a class="jnu-chip" href="#" onclick="return false;">🍵 Gui Pi Decoction</a>
+            <a class="jnu-chip" href="#" onclick="return false;">🫁 Lung cancer</a>
+          </span>
+        </div>
+        """, unsafe_allow_html=True)
+
+        if st.button("🧪 Try an example", key="open_example_dialog"):
+            _example_dialog()
 
         st.caption("👈 Start with **🤖 AI**, or pick a direction in the sidebar "
                    "(**🚀 Forward** / **🎯 Reverse**); then optimize combinations "
@@ -1912,6 +2300,36 @@ with tabs[0]:
     else:
         pr = result["protein_result"]
         ff = result["formula_filter"]
+        run_info = st.session_state.get("run_info") or {}
+
+        st.subheader("📋 Analysis Summary")
+
+        # Case line: mode, run id, timestamp
+        _case_bits = [f"**{'Forward' if is_fwd else 'Reverse'}** mode"]
+        if run_info.get("run_id"):
+            _case_bits.append(f"run `{run_info['run_id']}`")
+        if run_info.get("started_at"):
+            _case_bits.append(run_info["started_at"][:19].replace("T", " "))
+        st.caption(" · ".join(_case_bits))
+
+        # Input echo (what was actually analyzed)
+        _inp = run_info.get("input")
+        if _inp:
+            if isinstance(_inp, dict):
+                _in_bits = []
+                if _inp.get("disease"):
+                    _d = f"Disease: **{_inp['disease']}**"
+                    if _inp.get("disease_id"):
+                        _d += f" ({_inp['disease_id']})"
+                    _in_bits.append(_d)
+                if _inp.get("proteins"):
+                    _in_bits.append(f"Proteins: {', '.join(map(str, _inp['proteins'][:10]))}"
+                                    + (" …" if len(_inp["proteins"]) > 10 else ""))
+            else:
+                _in_bits = [f"Input: {', '.join(map(str, _inp[:10]))}"
+                            + (" …" if len(_inp) > 10 else "")]
+            if _in_bits:
+                st.markdown(" · ".join(_in_bits))
 
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("TCMs", len(pr.get("tcm", [])))
@@ -1923,6 +2341,12 @@ with tabs[0]:
             c4.metric("Formulas Found", len(pr.get("formula", [])))
         else:
             c4.metric("Network Edges", len(result["network"]))
+
+        # Run parameters, collapsed by default
+        _params = run_info.get("parameters")
+        if _params:
+            with st.expander("⚙️ Run parameters"):
+                st.json(_params)
 
         st.markdown("---")
         st.subheader("Analysis Log")
@@ -1937,6 +2361,10 @@ with tabs[0]:
         if ff:
             log_lines.append(f"Formula TCMs found: {len(ff.get('tcms_found', []))}")
         st.code("\n".join(log_lines), language=None)
+
+        st.caption("Next: explore per-entity tables in the **🌿 TCM / ⚗️ Chemical "
+                   "/ 🧬 Protein** tabs, the **🔗 Network**, **🧬 Enrichment** "
+                   "and **⚙️ Optimization**.")
 
 # ---- Tab 1: AI Consultation ----
 with tabs[1]:
@@ -1984,7 +2412,10 @@ with tabs[1]:
                     from jnuherb.chat import consult, check_database
 
                     with st.spinner("Analyzing with DeepSeek AI..."):
-                        ai_result = consult(symptoms_input.strip())
+                        ai_result = consult(
+                            symptoms_input.strip(),
+                            api_key=st.session_state.get("deepseek_api_key"),
+                        )
 
                     st.session_state.consultation = ai_result
 
@@ -2015,15 +2446,17 @@ with tabs[1]:
                 key="api_key_input",
             )
             if api_key_input:
-                import os
-
-                os.environ["DEEPSEEK_API_KEY"] = api_key_input.strip()
+                # P0-2 session isolation: keep the key in this session's
+                # state only. Writing os.environ would leak it process-wide
+                # to every other user of this Streamlit server.
+                st.session_state["deepseek_api_key"] = api_key_input.strip()
                 st.success("✅ API key set for this session.")
 
             st.caption(
-                "Your API key is only stored in memory for this session. "
-                "To persist it, set the `DEEPSEEK_API_KEY` environment variable "
-                "or add it to `.streamlit/secrets.toml`."
+                "Your API key is held in this session's memory and sent "
+                "directly to the model API; it is never written to the "
+                "environment, logs, or result files. For a server-wide "
+                "key, set `DEEPSEEK_API_KEY` in `.streamlit/secrets.toml`."
             )
     else:
         # Show consultation results
@@ -2101,16 +2534,19 @@ with tabs[1]:
                     })
                 st.dataframe(herb_df_data, use_container_width=True)
 
-                # Button to analyze these herbs
+                # Button to analyze these herbs — actually prefills Forward mode
                 herb_names = [h["name"] for h in herbs_found]
                 if st.button("🔬 Analyze These Herbs / 分析这些草药", key="ai_analyze_herbs"):
-                    st.session_state.forward_preset = herb_names
-                    st.session_state.forward_preset_type = "cn_name"
+                    st.session_state.pending_prefill = {
+                        "mode": "🚀 Forward",
+                        "widgets": {"forward_entity_type": "TCM (Herb)",
+                                    "forward_text_tcm": "\n".join(herb_names)},
+                    }
                     st.success(
-                        "Herb names copied! Switch to **Forward mode** → **TCM** "
-                        "and paste these names to run analysis.\n\n"
-                        "草药名称已复制！请切换到 **Forward 模式** → **TCM** 并粘贴名称以运行分析。"
+                        "Herbs loaded into **Forward → TCM**. "
+                        "Press **🚀 Run Analysis** in the sidebar to analyze them."
                     )
+                    st.rerun()
             if herbs_missing:
                 st.caption(f"⚠️ Not in database / 不在数据库中: {', '.join(herbs_missing)}")
 
@@ -2135,13 +2571,16 @@ with tabs[1]:
 
                 fml_hvpids = [f["HVPID"] for f in formulas_found]
                 if st.button("🔬 Analyze These Formulas / 分析这些方剂", key="ai_analyze_formulas"):
-                    st.session_state.forward_preset = fml_hvpids
-                    st.session_state.forward_preset_type = "HVMID"
+                    st.session_state.pending_prefill = {
+                        "mode": "🚀 Forward",
+                        "widgets": {"forward_entity_type": "Formula (方剂)",
+                                    "forward_text_fml": "\n".join(fml_hvpids)},
+                    }
                     st.success(
-                        "Formula IDs copied! Switch to **Forward mode** → **Formula** "
-                        "and use HVPID to run analysis.\n\n"
-                        "方剂 ID 已复制！请切换到 **Forward 模式** → **Formula** 并使用 HVPID 运行分析。"
+                        "Formulas loaded into **Forward → Formula**. "
+                        "Press **🚀 Run Analysis** in the sidebar to analyze them."
                     )
+                    st.rerun()
             if formulas_missing:
                 st.caption(f"⚠️ Not in database / 不在数据库中: {', '.join(formulas_missing)}")
 
@@ -2512,9 +2951,9 @@ with tabs[7]:
         else:
             st.info("Degree statistics not available.")
 
-# ---- Tab 8: DO Enrichment ----
+# ---- Tab 8: Enrichment (Disease / KEGG / GO, parameterized, lazy) ----
 with tabs[8]:
-    st.subheader("🧬 Disease Enrichment")
+    st.subheader("🧬 Enrichment")
     st.markdown("Based on the **Protein Results** from the current analysis.")
 
     if result is None:
@@ -2524,85 +2963,53 @@ with tabs[8]:
         if not genes:
             st.info("No protein genes available for enrichment.")
         else:
+            # Parameterized page: one enrichment collection is selected and
+            # computed on demand (P1-10) — switching collections never
+            # recomputes the others, and nothing runs until the user picks
+            # a collection after the analysis completes.
+            enr_kind = st.radio(
+                "Gene set collection",
+                ["Disease", "KEGG", "GO"],
+                horizontal=True,
+                key="enr_kind",
+            )
+            enr_key = f"enr_{enr_kind.lower()}"
             st.caption(f"{len(genes)} unique gene(s) extracted from Protein Results.")
-            if "enr_results" not in st.session_state:
-                with st.spinner("Running disease enrichment..."):
-                    st.session_state.enr_results = run_enrichment(genes)
+            if enr_key not in st.session_state:
+                with st.spinner(f"Running {enr_kind} enrichment..."):
+                    st.session_state[enr_key] = run_enrichment(
+                        genes, which=enr_kind.lower())
 
-            enr = st.session_state.enr_results
-            st.write(
-                f"Gene mapping: {enr['do']['n_mapped']} / {enr['do']['n_input']} "
-                f"genes matched to disease background gene sets."
-            )
-            _display_enrichment(
-                enr["do"]["top"],
-                enr["do"]["full"],
-                "Disease (Top 10)",
-                empty_msg="No disease terms found for the current gene set.",
-                download_key="download_do",
-            )
+            enr = st.session_state[enr_key]
+            if enr_kind == "GO":
+                st.write(
+                    f"Gene mapping: {enr['go']['n_mapped']} / {enr['go']['n_input']} "
+                    f"genes matched to GO background gene sets."
+                )
+                _display_go_enrichment(
+                    enr["go"]["top"],
+                    enr["go"]["full"],
+                    title="GO Enrichment (BP/CC/MF Top 3 each)",
+                    download_key="download_go",
+                )
+            else:
+                block = "do" if enr_kind == "Disease" else "kegg"
+                bg = "disease background gene sets" if enr_kind == "Disease" \
+                    else "KEGG background gene sets"
+                st.write(
+                    f"Gene mapping: {enr[block]['n_mapped']} / {enr[block]['n_input']} "
+                    f"genes matched to {bg}."
+                )
+                _display_enrichment(
+                    enr[block]["top"],
+                    enr[block]["full"],
+                    f"{enr_kind} (Top 10)",
+                    empty_msg=f"No {enr_kind} terms found for the current gene set.",
+                    download_key=f"download_{block}",
+                )
 
-# ---- Tab 9: KEGG Enrichment ----
+# ---- Tab 9: Optimization ----
 with tabs[9]:
-    st.subheader("🧬 KEGG Enrichment")
-    st.markdown("Based on the **Protein Results** from the current analysis.")
-
-    if result is None:
-        st.info("👈 Run a Forward/Reverse analysis first.")
-    else:
-        genes = extract_genes_from_result(result)
-        if not genes:
-            st.info("No protein genes available for enrichment.")
-        else:
-            st.caption(f"{len(genes)} unique gene(s) extracted from Protein Results.")
-            if "enr_results" not in st.session_state:
-                with st.spinner("Running KEGG enrichment..."):
-                    st.session_state.enr_results = run_enrichment(genes)
-
-            enr = st.session_state.enr_results
-            st.write(
-                f"Gene mapping: {enr['kegg']['n_mapped']} / {enr['kegg']['n_input']} "
-                f"genes matched to KEGG background gene sets."
-            )
-            _display_enrichment(
-                enr["kegg"]["top"],
-                enr["kegg"]["full"],
-                "KEGG Pathways (Top 10)",
-                empty_msg="No KEGG pathways found for the current gene set.",
-                download_key="download_kegg",
-            )
-
-# ---- Tab 10: GO Enrichment ----
-with tabs[10]:
-    st.subheader("🧬 GO Enrichment")
-    st.markdown("Based on the **Protein Results** from the current analysis.")
-
-    if result is None:
-        st.info("👈 Run a Forward/Reverse analysis first.")
-    else:
-        genes = extract_genes_from_result(result)
-        if not genes:
-            st.info("No protein genes available for enrichment.")
-        else:
-            st.caption(f"{len(genes)} unique gene(s) extracted from Protein Results.")
-            if "enr_results" not in st.session_state:
-                with st.spinner("Running GO enrichment..."):
-                    st.session_state.enr_results = run_enrichment(genes)
-
-            enr = st.session_state.enr_results
-            st.write(
-                f"Gene mapping: {enr['go']['n_mapped']} / {enr['go']['n_input']} "
-                f"genes matched to GO background gene sets."
-            )
-            _display_go_enrichment(
-                enr["go"]["top"],
-                enr["go"]["full"],
-                title="GO Enrichment (BP/CC/MF Top 3 each)",
-                download_key="download_go",
-            )
-
-# ---- Tab 11: Optimization ----
-with tabs[11]:
     if result is None:
         st.info("Run analysis first.")
     elif is_fwd:
@@ -2695,8 +3102,8 @@ with tabs[11]:
                 else:
                     st.info("No formula combination results.")
 
-# ---- Tab 12: Molecular Docking ----
-with tabs[12]:
+# ---- Tab 10: Molecular Docking ----
+with tabs[10]:
     st.subheader("🧪 Molecular Docking")
     st.markdown(
         "Single-ligand docking with **AutoDock Vina** (exhaustiveness 8, best "
