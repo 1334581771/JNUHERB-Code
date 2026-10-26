@@ -21,12 +21,14 @@ import pandas as pd
 from jnuherb.query import (
     get_chem_protein_links,
     get_chemicals,
+    get_diseases,
     get_formula,
     get_formula_tcm_links,
     get_protein_disease_links,
     get_proteins,
     get_tcm,
     get_tcm_chem_links,
+    match_disease_aliases,
 )
 
 _CJK_RE = re.compile(r"[一-鿿]")
@@ -48,11 +50,16 @@ def resolve_disease_to_targets(
     top Ensembl IDs, ready to feed :func:`from_proteins`.
 
     The link table only carries English vocabulary (MONDO/EFO/Orphanet
-    from OT, MeSH from CTD).  When a query contains Chinese characters
-    and matches nothing directly, it is translated through the LLM
-    (``jnuherb.chat.translate_disease_name``) and the English term is
-    looked up instead.  Translation is best-effort: any API failure just
-    yields the normal "unknown disease" result.
+    from OT, MeSH from CTD).  Chinese queries resolve in three stages:
+
+    1. the bundled alias table (offline; common diseases need no API),
+    2. LLM translation (``jnuherb.chat.translate_disease_name``) followed by
+       exact and partial-name matching of the English term,
+    3. partial-name matching of the original query (English near-misses
+       like "insomnia" vs "insomnia disorder" also benefit).
+
+    Translation is best-effort: any API failure just falls through to the
+    next stage and ultimately yields the normal "unknown disease" result.
 
     Args:
         disease: Disease name (English, case-insensitive) or prefixed id
@@ -86,20 +93,49 @@ def resolve_disease_to_targets(
         # name match never mixes targets from several same-named diseases.
         links = links[links["disease_id"] == disease_id]
     translated_from: Optional[str] = None
-    if links.empty and translate and _CJK_RE.search(disease):
+    en_term: Optional[str] = None
+    is_cjk = bool(_CJK_RE.search(disease))
+
+    if links.empty and disease_id is None and is_cjk:
+        # Stage 1 — offline alias table: no API round-trip, works even
+        # when the LLM is unreachable or unconfigured.
+        ids = match_disease_aliases(disease)
+        if ids:
+            alinks = get_protein_disease_links(by_disease=ids,
+                                               min_score=min_score,
+                                               sources=sources)
+            if not alinks.empty:
+                links = alinks
+
+    if links.empty and translate and is_cjk:
+        # Stage 2 — LLM translation, exact match first.
         # Lazy import: keeps chat.py (and its LLM deps) out of the
         # import graph unless a Chinese query actually needs it.
         from jnuherb.chat import translate_disease_name
 
         en = translate_disease_name(disease, api_key=api_key)
         if en:
-            tlinks = get_protein_disease_links(
-                by_disease=en, min_score=min_score, sources=sources)
-            if disease_id is not None:
-                tlinks = tlinks[tlinks["disease_id"] == disease_id]
+            en_term = en
+            tlinks = get_protein_disease_links(by_disease=en,
+                                               min_score=min_score,
+                                               sources=sources)
             if not tlinks.empty:
                 links = tlinks
                 translated_from = disease
+
+    if links.empty and disease_id is None and 0 < len(disease) <= 80:
+        # Stage 3 — partial-name fallback: the exact vocabulary name often
+        # differs from the typed / translated term, so take the candidate
+        # with the most supporting protein links.
+        cands = get_diseases(en_term or disease)
+        if not cands.empty:
+            flinks = get_protein_disease_links(
+                by_disease=cands["disease_id"].iloc[0],
+                min_score=min_score, sources=sources)
+            if not flinks.empty:
+                links = flinks
+                if en_term:
+                    translated_from = disease
 
     out: dict[str, Any] = {
         "disease_id": "", "disease_name": disease,
@@ -162,10 +198,10 @@ def dfs_filter(
     valid_chem_protein_links = chem_protein_links[
         chem_protein_links["Ensembl_ID"].isin(target_protein_ids)
     ]
-    chem_id_set = set(valid_chem_protein_links["HVCID"])
+    chem_id_set = set(valid_chem_protein_links["PubChem_id"])
 
     valid_tcm_chem_links = tcm_chem_links[
-        tcm_chem_links["HVCID"].isin(chem_id_set)
+        tcm_chem_links["PubChem_id"].isin(chem_id_set)
     ]
     tcm_id_set = set(valid_tcm_chem_links["HVMID"])
 
@@ -191,7 +227,7 @@ def dfs_filter(
             ].copy()
 
     tcm = tcm[tcm["HVMID"].isin(tcm_id_set)].copy()
-    chem = chem[chem["HVCID"].isin(chem_id_set)].copy()
+    chem = chem[chem["PubChem_id"].isin(chem_id_set)].copy()
 
     # Proteins: keep only those actually connected to surviving chemicals
     connected_protein_ids = set(valid_chem_protein_links["Ensembl_ID"])
@@ -199,10 +235,10 @@ def dfs_filter(
 
     tcm_chem_links = tcm_chem_links[
         tcm_chem_links["HVMID"].isin(tcm_id_set)
-        & tcm_chem_links["HVCID"].isin(chem_id_set)
+        & tcm_chem_links["PubChem_id"].isin(chem_id_set)
     ].copy()
     chem_protein_links = chem_protein_links[
-        chem_protein_links["HVCID"].isin(chem_id_set)
+        chem_protein_links["PubChem_id"].isin(chem_id_set)
         & chem_protein_links["Ensembl_ID"].isin(connected_protein_ids)
     ].copy()
 
@@ -288,8 +324,8 @@ def from_tcm_or_formula(
         tcm_df = get_tcm(id_type, tcm_or_formula_id)
 
     tcm_chem_links = get_tcm_chem_links("HVMID", list(tcm_df["HVMID"]))
-    chem = get_chemicals("HVCID", list(tcm_chem_links["HVCID"]))
-    chem_prot_links = get_chem_protein_links("HVCID", list(chem["HVCID"]), score)
+    chem = get_chemicals("PubChem_id", list(tcm_chem_links["PubChem_id"]))
+    chem_prot_links = get_chem_protein_links("PubChem_id", list(chem["PubChem_id"]), score)
 
     if proteins_id is None:
         proteins = get_proteins("Ensembl_ID", list(chem_prot_links["Ensembl_ID"]))
@@ -442,8 +478,8 @@ def from_proteins(
             f"the chemical-protein interaction database."
         )
 
-    chem = get_chemicals("HVCID", list(chem_prot_links["HVCID"]))
-    tcm_chem_links = get_tcm_chem_links("HVCID", list(chem["HVCID"]))
+    chem = get_chemicals("PubChem_id", list(chem_prot_links["PubChem_id"]))
+    tcm_chem_links = get_tcm_chem_links("PubChem_id", list(chem["PubChem_id"]))
     tcm_df = get_tcm("HVMID", list(tcm_chem_links["HVMID"]))
     fml_tcm_links = get_formula_tcm_links("HVMID", list(tcm_df["HVMID"]))
     fml = get_formula("HVPID", list(fml_tcm_links["HVPID"]))
@@ -506,3 +542,89 @@ def from_proteins(
         }
 
     return None
+
+
+def suggest_formulas_from_tcms(
+    tcm_df: pd.DataFrame,
+    min_overlap: int = 2,
+    min_coverage: float = 0.5,
+    top_k: int = 20,
+) -> pd.DataFrame:
+    """Suggest database formulas whose herb composition overlaps a TCM set.
+
+    Designed for **Reverse mode**: the herbs surviving a disease-seeded
+    reverse analysis are the "active" herbs, and formulas made mostly of
+    them are exactly the candidate prescriptions a researcher wants to
+    see (「以药测方」).  A formula qualifies when at least ``min_overlap``
+    of its herbs are in the result AND those herbs make up at least
+    ``min_coverage`` of its full composition.
+
+    Args:
+        tcm_df: TCM result table (must contain ``HVMID`` and ``cn_name``).
+        min_overlap: Minimum number of result herbs in the formula.
+        min_coverage: Minimum fraction of the formula's herbs matched.
+        top_k: Maximum number of suggestions.
+
+    Returns:
+        DataFrame with columns ``HVPID``, ``name``, ``matched``,
+        ``total``, ``coverage``, ``matched_names`` (list of the result
+        herbs inside the formula), sorted by matched count then
+        coverage.  Empty DataFrame when nothing qualifies.
+    """
+    if tcm_df is None or len(tcm_df) == 0 or "HVMID" not in tcm_df.columns:
+        return pd.DataFrame(
+            columns=["HVPID", "name", "matched", "total", "coverage",
+                     "matched_names"]
+        )
+
+    herb_ids = list(tcm_df["HVMID"].astype(str))
+    name_of = dict(zip(tcm_df["HVMID"].astype(str), tcm_df["cn_name"]))
+
+    # Formulas containing at least one result herb (chunked SQL).
+    hits = get_formula_tcm_links("HVMID", herb_ids)
+    if hits is None or len(hits) == 0:
+        return pd.DataFrame(
+            columns=["HVPID", "name", "matched", "total", "coverage",
+                     "matched_names"]
+        )
+
+    herb_set = set(herb_ids)
+    candidate_hvpids = list(hits["HVPID"].astype(str).unique())
+
+    # Full composition of those formulas for the coverage denominator.
+    full = get_formula_tcm_links("HVPID", candidate_hvpids)
+    total = full.groupby("HVPID")["HVMID"].nunique()
+
+    # Matched herbs per formula (deduplicated names of duplicates kept).
+    hits = hits.assign(HVMID=hits["HVMID"].astype(str),
+                       HVPID=hits["HVPID"].astype(str))
+    hits = hits[hits["HVMID"].isin(herb_set)]
+    matched = hits.groupby("HVPID")["HVMID"].nunique()
+
+    fml = get_formula("HVPID", candidate_hvpids)[["HVPID", "name"]].copy()
+    fml["HVPID"] = fml["HVPID"].astype(str)
+    fml["matched"] = fml["HVPID"].map(matched).fillna(0).astype(int)
+    fml["total"] = fml["HVPID"].map(total).fillna(0).astype(int)
+    fml["coverage"] = (fml["matched"] / fml["total"]).round(3)
+    fml = fml[(fml["matched"] >= min_overlap)
+              & (fml["coverage"] >= min_coverage)]
+    if len(fml) == 0:
+        return pd.DataFrame(
+            columns=["HVPID", "name", "matched", "total", "coverage",
+                     "matched_names"]
+        )
+
+    # Names of the matched herbs (for display + network filtering).
+    by_hvpid = hits.groupby("HVPID")["HVMID"].apply(
+        lambda s: [name_of.get(h, h) for h in sorted(set(s))]
+    )
+    fml["matched_names"] = fml["HVPID"].map(by_hvpid)
+
+    # Same-name formulas (人参散 x26 ...) keep only the best coverage.
+    fml = fml.sort_values(["matched", "coverage"], ascending=False)
+    fml = fml.drop_duplicates(subset=["name"], keep="first")
+
+    return (fml.sort_values(["matched", "coverage", "name"],
+                            ascending=[False, False, True])
+                .head(top_k)
+                .reset_index(drop=True))

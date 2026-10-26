@@ -32,6 +32,7 @@ import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+import re
 import streamlit as st
 
 matplotlib.use("Agg")
@@ -924,8 +925,123 @@ def _fig_to_pdf_bytes(fig, engine: str = "plotly") -> bytes:
         raise ValueError(f"Unsupported engine: {engine}")
 
 
+def _fr_layout(
+    edges: list[tuple[str, str]],
+    nodes: list[str],
+    seed: int = 42,
+    iterations: int = 80,
+) -> dict[str, tuple[float, float]]:
+    """Small deterministic Fruchterman–Reingold spring layout in numpy.
+
+    Dependency-free replacement for networkx.spring_layout (networkx is
+    not a declared dependency).  ``nodes`` are the unique node names and
+    ``edges`` are (source, target) pairs; positions are scaled to a
+    ~100x100 canvas.
+    """
+    n = len(nodes)
+    if n == 0:
+        return {}
+    idx = {name: i for i, name in enumerate(nodes)}
+    rng = np.random.default_rng(seed)
+    pos = rng.random((n, 2)) * 100.0
+    edge_idx = [(idx[s], idx[t]) for s, t in edges if s in idx and t in idx]
+    # Optimal pairwise distance for a pleasant spread.
+    k = 100.0 / max(1.0, np.sqrt(n))
+    temp = 100.0
+
+    for _ in range(iterations):
+        disp = np.zeros((n, 2))
+        # Repulsive forces between all pairs.
+        diff = pos[:, None, :] - pos[None, :, :]
+        dist = np.linalg.norm(diff, axis=-1)
+        dist = np.where(dist == 0, 1e-6, dist)
+        force = k * k / dist
+        with np.errstate(divide="ignore", invalid="ignore"):
+            disp += (diff / dist[..., None] * force[..., None]).sum(axis=1)
+        # Attractive forces along edges.
+        for i, j in edge_idx:
+            d = pos[i] - pos[j]
+            dist = max(np.linalg.norm(d), 1e-6)
+            f = dist * dist / k
+            disp[i] -= d / dist * f
+            disp[j] += d / dist * f
+        length = np.linalg.norm(disp, axis=1, keepdims=True)
+        length = np.where(length == 0, 1e-6, length)
+        step = np.minimum(length, temp) * disp / length
+        pos += step
+        temp *= 0.95
+
+    pos -= pos.mean(axis=0)
+    return {name: (float(pos[idx[name], 0]), float(pos[idx[name], 1]))
+            for name in nodes}
+
+
+def _network_mpl_fig(
+    nodes: list[str],
+    pos: dict[str, tuple[float, float]],
+    edges: list[tuple[str, str]],
+    attr_map: dict[str, str],
+    color_map: dict[str, str],
+    title: str,
+):
+    """Matplotlib twin of the on-screen Plotly network, used ONLY for the
+    vector-PDF download (no Chromium/kaleido dependency on the server)."""
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots(figsize=(12, 9))
+    for s, t in edges:
+        if s in pos and t in pos:
+            x0, y0 = pos[s]
+            x1, y1 = pos[t]
+            ax.plot([x0, x1], [y0, y1], color="#b8c2cc", lw=0.5, zorder=1)
+    xs = [pos[m][0] for m in nodes if m in pos]
+    ys = [pos[m][1] for m in nodes if m in pos]
+    cs = [color_map.get(attr_map.get(m, ""), "#95a5a6") for m in nodes if m in pos]
+    ax.scatter(xs, ys, c=cs, s=70, edgecolors="#333333", linewidths=0.6, zorder=2)
+    for m in nodes:
+        if m in pos:
+            ax.annotate(m, (pos[m][0], pos[m][1]),
+                        fontsize=6, alpha=0.75, zorder=3)
+    # Legend by attribute type.
+    for attr, color in color_map.items():
+        ax.scatter([], [], c=color, s=70, edgecolors="#333", label=attr)
+    ax.legend(loc="upper right", fontsize=9, frameon=False)
+    ax.set_title(title, fontsize=13)
+    ax.axis("off")
+    return fig
+
+
+def _boost_mpl_fig(df: pd.DataFrame, title: str, color: str):
+    """Matplotlib bar chart twin of the Plotly combination-boost charts,
+    for vector-PDF download without kaleido."""
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    ranks = np.arange(len(df)) + 1
+    ax.bar(np.arange(len(df)), df["Boost"].to_numpy(), color=color)
+    ax.set_xticks(np.arange(len(df)))
+    ax.set_xticklabels([str(r) for r in ranks], rotation=0)
+    ax.set_xlabel("Combination Rank")
+    ax.set_ylabel("Boost")
+    ax.set_title(title)
+    fig.tight_layout()
+    return fig
+
+
+def _dl_slug(download_key: Optional[str], title: str) -> str:
+    """Short content-based slug for download filenames.
+
+    ``download_key="download_kegg"`` → ``"kegg"``; falls back to a
+    slugified plot title when no key is given.
+    """
+    src = re.sub(r"^download_", "", download_key or "") or (title or "plot")
+    slug = re.sub(r"[^A-Za-z0-9]+", "_", src).strip("_").lower()
+    return slug or "plot"
+
+
 def _pdf_download_button(fig, filename: str, label: str, engine: str = "plotly", key: Optional[str] = None):
     """Render a download button that exports a figure as a vector PDF on click."""
+
     def _make_pdf():
         return _fig_to_pdf_bytes(fig, engine=engine)
 
@@ -967,7 +1083,7 @@ def _display_enrichment(
         st.download_button(
             label="📥 Download all results (CSV)",
             data=csv,
-            file_name=f"{title.replace(' ', '_').replace('/', '_')}_all.csv",
+            file_name=f"{_dl_slug(download_key, title)}_all.csv",
             mime="text/csv",
             key=download_key or f"download_{title}",
             use_container_width=False,
@@ -990,7 +1106,7 @@ def _display_enrichment(
     )
     st.pyplot(fig_bar)
     _pdf_download_button(
-        fig_bar, f"{title.replace(' ', '_').replace('/', '_')}_bar.pdf",
+        fig_bar, f"{_dl_slug(download_key, title)}_bar.pdf",
         label="📥 PDF", engine="matplotlib", key=f"pdf_bar_{download_key or title}"
     )
 
@@ -1002,7 +1118,7 @@ def _display_enrichment(
         )
         st.pyplot(fig_dot)
         _pdf_download_button(
-            fig_dot, f"{title.replace(' ', '_').replace('/', '_')}_dot.pdf",
+            fig_dot, f"{_dl_slug(download_key, title)}_dot.pdf",
             label="📥 PDF", engine="matplotlib", key=f"pdf_dot_{download_key or title}"
         )
 
@@ -1038,7 +1154,7 @@ def _display_go_enrichment(
         st.download_button(
             label="📥 Download all GO results (CSV)",
             data=csv,
-            file_name="GO_Enrichment_all.csv",
+            file_name="go_enrichment.csv",
             mime="text/csv",
             key=download_key or "download_go_all",
             use_container_width=False,
@@ -1064,7 +1180,7 @@ def _display_go_enrichment(
     )
     st.pyplot(fig_bar)
     _pdf_download_button(
-        fig_bar, "GO_Enrichment_bar.pdf",
+        fig_bar, "go_enrichment_bar.pdf",
         label="📥 PDF", engine="matplotlib", key=f"pdf_go_bar_{download_key or 'go'}"
     )
 
@@ -1076,7 +1192,7 @@ def _display_go_enrichment(
     )
     st.pyplot(fig_dot)
     _pdf_download_button(
-        fig_dot, "GO_Enrichment_dot.pdf",
+        fig_dot, "go_enrichment_dot.pdf",
         label="📥 PDF", engine="matplotlib", key=f"pdf_go_dot_{download_key or 'go'}"
     )
 
@@ -1241,6 +1357,53 @@ def _run_reverse(
     return _build_network_results(result, formula_list, output_dir, is_forward=False)
 
 
+# English dosage-form words used in Formula_en_name / Formula_alias.  They
+# are dropped before pinyin matching because users type the pinyin of the
+# Chinese name ("Xiao Chai Hu Tang") while the database stores an English
+# translation ("Xiao Chai Hu Decoction").
+_FORM_WORDS_RE = re.compile(
+    r"\b(decoctions?|pills?|granules?|capsules?|tablets?|syrups?|powders?|"
+    r"injections?|liquids?|sprays?|plasters?|ointments?|drops?|wines?|teas?|"
+    r"pastes?|pellets?|lozenges?|mixtures?|solutions?|suspensions?|extracts?|"
+    r"tinctures?|soft|oral|effervescent|sliced|decocted)\b",
+    re.IGNORECASE,
+)
+
+
+def _formula_pinyin_mask(fml_df: pd.DataFrame, query: str) -> pd.Series:
+    """Row mask of formulas whose pinyin matches ``query``.
+
+    Matching ignores spaces, case and English dosage-form words, in both
+    directions: "Xiao Chai Hu Tang", "xiao chai hu" and "xiaochaihu" all
+    find "Xiao Chai Hu Decoction"; "yougui wan" finds "You Gui Pill".
+    """
+    q_flat = re.sub(r"[^a-z0-9]", "", str(query).lower())
+    mask = pd.Series(False, index=fml_df.index)
+    if not q_flat:
+        return mask
+    for col in (c for c in ("Formula_en_name", "Formula_alias")
+                if c in fml_df.columns):
+        text = fml_df[col].fillna("").astype(str)
+        # Each ;/-separated alias is a separate segment: matching and
+        # reverse-containment must not leak across aliases.
+        segments = text.str.split(r"[;；/]", expand=True)
+        for seg_col in segments.columns:
+            seg = segments[seg_col].fillna("")
+            flat = (
+                seg.str.replace(_FORM_WORDS_RE, " ", regex=True)
+                   .str.lower()
+                   .str.replace(r"[^a-z0-9]", "", regex=True)
+            )
+            m = flat.str.contains(re.escape(q_flat), regex=True)
+            # Reverse containment (query carries the form word, DB doesn't):
+            # require a minimum length so "wan"/"tang" alone can't match all.
+            for idx, val in flat.items():
+                if len(val) >= 4 and val in q_flat:
+                    m.loc[idx] = True
+            mask = mask | m
+    return mask
+
+
 @st.cache_data(show_spinner="Running forward analysis...")
 def _run_forward(
     entities_tuple: tuple[str, ...],
@@ -1256,30 +1419,37 @@ def _run_forward(
     """Forward: TCM/formula/monomer → chemicals → proteins.
 
     Routes based on id_type:
-    - "Name" → monomer (chemical name) query
-    - "Formula Name" → search formula by name, then run forward analysis
+    - "Name" / "PubChem_id" → monomer query (chemical name or PubChem ID)
+    - "Formula Name" / "Pinyin" → search formula by name/pinyin, then run
+      forward analysis
     - everything else → standard from_tcm_or_formula
     """
     entities_list = list(entities_tuple)
     proteins_list = list(proteins_tuple) if proteins_tuple else None
 
-    # --- Monomer: chemical name query ---
-    if id_type == "Name":
+    # --- Monomer: chemical name or PubChem ID query ---
+    if id_type in ("Name", "PubChem_id"):
         return _run_monomer_forward(
-            chem_names=entities_list,
+            chem_keys=entities_list,
+            chem_id_type="Name" if id_type == "Name" else "PubChem_id",
             proteins_list=proteins_list,
             score=score,
             output_dir=output_dir,
         )
 
-    # --- Formula Name: resolve name → HVPID first ---
-    if id_type == "Formula Name":
+    # --- Formula Name / Pinyin: resolve name → HVPID first ---
+    if id_type in ("Formula Name", "Pinyin"):
         from jnuherb._data import _load_table
 
         fml_all = _load_table("jnuherb_formula")
         all_hvpids = []
         for name in entities_list:
-            mask = fml_all["name"].str.contains(name, na=False, case=False)
+            if id_type == "Formula Name":
+                mask = fml_all["name"].str.contains(
+                    name, na=False, case=False, regex=False
+                )
+            else:
+                mask = _formula_pinyin_mask(fml_all, name)
             all_hvpids.extend(fml_all.loc[mask, "HVPID"].tolist())
 
         if not all_hvpids:
@@ -1306,12 +1476,14 @@ def _run_forward(
 
 
 def _run_monomer_forward(
-    chem_names: list[str],
+    chem_keys: list[str],
+    chem_id_type: str,
     proteins_list: list[str] | None,
     score: float,
     output_dir: str,
 ) -> dict | None:
-    """Monomer-first forward analysis: chemical name → targets → TCMs → formulas."""
+    """Monomer-first forward analysis: chemical (name or PubChem ID) →
+    targets → TCMs → formulas."""
     from jnuherb.query import (
         get_chemicals,
         get_tcm_chem_links,
@@ -1323,16 +1495,18 @@ def _run_monomer_forward(
     from jnuherb.score import herbiv_score
     from jnuherb.output import out_for_cyto, vis_network
 
-    # Step 1: Find chemicals by name
-    chem = get_chemicals("Name", chem_names)
+    # Step 1: Find chemicals by name or PubChem ID
+    chem = get_chemicals(chem_id_type, chem_keys)
     if len(chem) == 0:
+        key_desc = "names" if chem_id_type == "Name" else "PubChem IDs"
         raise _AnalysisDataError(
-            f"No chemicals found for: {', '.join(chem_names)}. "
-            "Please check the spelling or try a different chemical name."
+            f"No chemicals found for the given {key_desc}: "
+            f"{', '.join(chem_keys)}. "
+            "Please check the spelling or try a different chemical."
         )
 
     # Step 2: Get TCMs containing these chemicals
-    tcm_chem_links = get_tcm_chem_links("HVCID", list(chem["HVCID"]))
+    tcm_chem_links = get_tcm_chem_links("PubChem_id", list(chem["PubChem_id"]))
     if len(tcm_chem_links) == 0:
         raise _AnalysisDataError(
             "No TCMs found containing these chemicals in the database."
@@ -1342,7 +1516,7 @@ def _run_monomer_forward(
 
     # Step 3: Get chemical-protein links
     from jnuherb.query import get_chem_protein_links, get_proteins
-    chem_prot_links = get_chem_protein_links("HVCID", list(chem["HVCID"]), score)
+    chem_prot_links = get_chem_protein_links("PubChem_id", list(chem["PubChem_id"]), score)
     if len(chem_prot_links) == 0:
         raise _AnalysisDataError(
             f"No protein targets found at score >= {score}. Try lowering the threshold."
@@ -1406,13 +1580,18 @@ def _build_network_results(
         network = pd.read_csv(network_path, dtype=str, keep_default_na=False)
         node = pd.read_csv(node_path, dtype=str, keep_default_na=False)
     else:
-        # Build from raw result
+        # Build from raw result.  Select edge endpoint columns BY NAME —
+        # chem_protein_links is ordered (Ensembl_ID, Combined_score,
+        # PubChem_id), so positional iloc would grab the score column and
+        # drop every chemical→protein edge.
         tcl = api_result.get("tcm_chem_links")
         cpl = api_result.get("chem_protein_links")
         if tcl is not None and cpl is not None:
+            _chem_col = "PubChem_id" if "PubChem_id" in cpl.columns else "HVCID"
             network = pd.DataFrame({
-                "SourceNode": list(tcl.iloc[:, 0]) + list(cpl.iloc[:, 0]),
-                "TargetNode": list(tcl.iloc[:, 1]) + list(cpl.iloc[:, 1]),
+                "SourceNode": list(tcl["HVMID"]) + list(cpl[_chem_col]),
+                "TargetNode": list(tcl[_chem_col if _chem_col in tcl.columns else tcl.columns[1]])
+                           + list(cpl["Ensembl_ID"]),
             })
         else:
             network = pd.DataFrame(columns=["SourceNode", "TargetNode"])
@@ -1823,6 +2002,46 @@ def _render_overview() -> None:
                "and **⚙️ Optimization**.")
 
 
+def _render_consultation_report(ai: dict) -> None:
+    """Render the bilingual consultation report: a full Chinese block
+    first, then a full English block, each collapsible at the 🏥
+    syndrome title.  Headings keep the same font size in both languages
+    because both are expander labels / bold markdown."""
+    syndrome_zh = ai.get("syndrome", {}).get("zh", "TCM Analysis")
+    syndrome_en = ai.get("syndrome", {}).get("en", "")
+    treatment = ai.get("treatment_principle", {})
+    analysis_zh = ai.get("analysis", {}).get("zh", "")
+    analysis_en = ai.get("analysis", {}).get("en", "")
+    explanation_zh = ai.get("explanation", {}).get("zh", "")
+    explanation_en = ai.get("explanation", {}).get("en", "")
+
+    # ---- Chinese block (expanded by default) ----
+    with st.expander(f"🏥 {syndrome_zh}", expanded=True):
+        if treatment.get("zh"):
+            st.markdown(f"**治法**\n\n{treatment['zh']}")
+        if analysis_zh:
+            st.markdown(f"**病机分析**\n\n{analysis_zh}")
+        if explanation_zh:
+            st.markdown("**用药思路**")
+            st.markdown(explanation_zh)
+
+    # ---- English block (collapsed by default) ----
+    if (syndrome_en or analysis_en or explanation_en
+            or treatment.get("en")):
+        with st.expander(
+            f"🏥 {syndrome_en or syndrome_zh}", expanded=False
+        ):
+            if treatment.get("en"):
+                st.markdown(
+                    f"**Treatment Principle**\n\n{treatment['en']}"
+                )
+            if analysis_en:
+                st.markdown(f"**Pathogenesis Analysis**\n\n{analysis_en}")
+            if explanation_en:
+                st.markdown("**Treatment Rationale**")
+                st.markdown(explanation_en)
+
+
 def _render_ai() -> None:
     result = st.session_state.get("result")
     is_fwd = result.get("is_forward", False) if result else False
@@ -1869,11 +2088,17 @@ def _render_ai() -> None:
                 try:
                     from jnuherb.chat import consult, check_database
 
-                    with st.spinner("Analyzing with DeepSeek AI..."):
+                    with st.spinner("Analyzing by JNUHERB..."):
                         ai_result = consult(
                             symptoms_input.strip(),
                             api_key=st.session_state.get("deepseek_api_key"),
                         )
+
+                    # Daily pool exhausted (server-side refusal, no API call
+                    # was made): surface the fixed message and stop here.
+                    if ai_result.get("quota_exceeded"):
+                        st.error(f"😔 {ai_result['quota_exceeded']}")
+                        st.stop()
 
                     st.session_state.consultation = ai_result
 
@@ -1889,69 +2114,24 @@ def _render_ai() -> None:
                 except ValueError as e:
                     st.error(
                         f"⚠️ {e}\n\n"
-                        "Please set your DeepSeek API key below."
+                        "The AI service is not configured on this server."
                     )
                 except RuntimeError as e:
                     st.error(f"❌ {e}")
-
-        # API key section (collapsible)
-        with st.expander("⚙️ API Settings"):
-            api_key_input = st.text_input(
-                "DeepSeek API Key",
-                type="password",
-                placeholder="sk-...",
-                help="Get your key at https://platform.deepseek.com",
-                key="api_key_input",
-            )
-            if api_key_input:
-                # P0-2 session isolation: keep the key in this session's
-                # state only. Writing os.environ would leak it process-wide
-                # to every other user of this Streamlit server.
-                st.session_state["deepseek_api_key"] = api_key_input.strip()
-                st.success("✅ API key set for this session.")
-
-            st.caption(
-                "Your API key is held in this session's memory and sent "
-                "directly to the model API; it is never written to the "
-                "environment, logs, or result files. For a server-wide "
-                "key, set `DEEPSEEK_API_KEY` in `.streamlit/secrets.toml`."
-            )
     else:
-        # Show consultation results
+        # Show consultation results — full Chinese block first, then a
+        # full English block, each collapsible at the 🏥 syndrome title.
         ai = st.session_state.consultation
 
         c1, c2 = st.columns([2, 1])
         with c1:
-            syndrome_zh = ai.get("syndrome", {}).get("zh", "TCM Analysis")
-            syndrome_en = ai.get("syndrome", {}).get("en", "")
-            st.markdown(f"### 🏥 {syndrome_zh}")
-            if syndrome_en:
-                st.markdown(f"*{syndrome_en}*")
-
-            treatment = ai.get("treatment_principle", {})
-            if treatment.get("zh"):
-                treatment_en = f" / {treatment['en']}" if treatment.get("en") else ""
-                st.markdown(
-                    f"**治法 / Treatment Principle**：{treatment['zh']}{treatment_en}"
-                )
-
-            analysis_zh = ai.get("analysis", {}).get("zh", "")
-            analysis_en = ai.get("analysis", {}).get("en", "")
-            if analysis_zh or analysis_en:
-                st.markdown("**Analysis / 病机分析**")
-                if analysis_zh:
-                    st.markdown(f"{analysis_zh}")
-                if analysis_en:
-                    st.caption(f"{analysis_en}")
-
-            explanation_zh = ai.get("explanation", {}).get("zh", "")
-            explanation_en = ai.get("explanation", {}).get("en", "")
-            if explanation_zh or explanation_en:
-                st.markdown("**Treatment Rationale / 用药思路**")
-                if explanation_zh:
-                    st.markdown(f"{explanation_zh}")
-                if explanation_en:
-                    st.caption(f"{explanation_en}")
+            # Brand/identity/off-topic reply: single fixed message, no
+            # bilingual report blocks.
+            if ai.get("identity_reply"):
+                st.markdown("### 🏥 JNUHERB")
+                st.info(ai["identity_reply"])
+            else:
+                _render_consultation_report(ai)
 
             # Validation warnings
             warnings = ai.get("validation_warnings", [])
@@ -1992,19 +2172,18 @@ def _render_ai() -> None:
                     })
                 st.dataframe(herb_df_data, use_container_width=True)
 
-                # Button to analyze these herbs — actually prefills Forward mode
+                # Button to analyze these herbs — prefills Forward mode and
+                # jumps straight to the Network Pharmacology page (staying
+                # on the AI page would leave the user with no visible
+                # feedback, since the sidebar inputs live on that page).
                 herb_names = [h["name"] for h in herbs_found]
                 if st.button("🔬 Analyze These Herbs / 分析这些草药", key="ai_analyze_herbs"):
                     st.session_state.pending_prefill = {
                         "mode": "🚀 Forward",
-                        "widgets": {"forward_entity_type": "TCM (Herb)",
+                        "widgets": {"forward_entity_type": "Herb (草药)",
                                     "forward_text_tcm": "\n".join(herb_names)},
                     }
-                    st.success(
-                        "Herbs loaded into **Forward → TCM**. "
-                        "Press **🚀 Run Analysis** in the sidebar to analyze them."
-                    )
-                    st.rerun()
+                    st.switch_page(_PAGES["analysis"])
             if herbs_missing:
                 st.caption(f"⚠️ Not in database / 不在数据库中: {', '.join(herbs_missing)}")
 
@@ -2027,18 +2206,16 @@ def _render_ai() -> None:
                     })
                 st.dataframe(fml_df_data, use_container_width=True)
 
-                fml_hvpids = [f["HVPID"] for f in formulas_found]
+                # Prefill by Chinese name (not HVPID): the sidebar Formula
+                # ID Type no longer offers an HVPID option.
+                fml_names = [f["full_name"] for f in formulas_found]
                 if st.button("🔬 Analyze These Formulas / 分析这些方剂", key="ai_analyze_formulas"):
                     st.session_state.pending_prefill = {
                         "mode": "🚀 Forward",
                         "widgets": {"forward_entity_type": "Formula (方剂)",
-                                    "forward_text_fml": "\n".join(fml_hvpids)},
+                                    "forward_text_fml": "\n".join(fml_names)},
                     }
-                    st.success(
-                        "Formulas loaded into **Forward → Formula**. "
-                        "Press **🚀 Run Analysis** in the sidebar to analyze them."
-                    )
-                    st.rerun()
+                    st.switch_page(_PAGES["analysis"])
             if formulas_missing:
                 st.caption(f"⚠️ Not in database / 不在数据库中: {', '.join(formulas_missing)}")
 
@@ -2078,10 +2255,6 @@ def _render_ai() -> None:
                         })
                     st.dataframe(fml_cand_data, use_container_width=True)
 
-        st.markdown("---")
-        with st.expander("📝 Raw AI Response / 原始 AI 回复"):
-            st.text(ai.get("raw_response", ""))
-
 
 def _render_tcm() -> None:
     result = st.session_state.get("result")
@@ -2092,7 +2265,7 @@ def _render_tcm() -> None:
         tcm_df = result["protein_result"].get("tcm")
         if tcm_df is not None and len(tcm_df) > 0:
             tcm_df = tcm_df.copy()
-            disp_cols = [c for c in ["HVMID", "cn_name", "pinyin_name", "en_name", "Importance Score"]
+            disp_cols = [c for c in ["cn_name", "pinyin_name", "en_name", "Importance Score"]
                         if c in tcm_df.columns]
             tcm_disp = tcm_df[disp_cols].sort_values("Importance Score", ascending=False)
 
@@ -2103,13 +2276,13 @@ def _render_tcm() -> None:
                 tcm_disp.head(15),
                 x="Importance Score",
                 y=y_col,
-                title="Top 15 TCMs",
+                title="Top 15 Herbs",
                 xlabel="Importance Score",
                 color="#8CC6ED",
             )
             st.pyplot(fig)
             _pdf_download_button(
-                fig, "Top_15_TCMs.pdf",
+                fig, "herbs.pdf",
                 label="📥 PDF", engine="matplotlib", key="pdf_tcm_bar"
             )
         else:
@@ -2131,14 +2304,14 @@ def _render_chemical() -> None:
                 try:
                     from jnuherb._data import _load_table as _load_chem_tbl
                     _chem_meta = _load_chem_tbl("jnuherb_chemicals")
-                    _need = ["HVCID", "OB"] + [c for c in ("OB_source", "DL_TCMSP", "DL_HERB", "DL") if c in _chem_meta.columns]
+                    _need = ["PubChem_id", "OB"] + [c for c in ("OB_source", "DL_TCMSP", "DL_HERB", "DL") if c in _chem_meta.columns]
                     if "OB" in _chem_meta.columns and _chem_meta.columns.intersection(["DL_TCMSP", "DL_HERB", "DL"]).any():
-                        chem_df = chem_df.merge(_chem_meta[_need].drop_duplicates("HVCID"), on="HVCID", how="left")
+                        chem_df = chem_df.merge(_chem_meta[_need].drop_duplicates("PubChem_id"), on="PubChem_id", how="left")
                 except Exception:
                     pass
                 _DL_COLS = [c for c in ("DL_TCMSP", "DL_HERB", "DL") if c in chem_df.columns]
 
-            disp_cols = [c for c in ["HVCID", "Name", "Molecular_Formula", "OB", "OB_source",
+            disp_cols = [c for c in ["PubChem_id", "Name", "Molecular_Formula", "OB", "OB_source",
                                      "DL_TCMSP", "DL_HERB", "DL", "Importance Score"]
                         if c in chem_df.columns]
 
@@ -2208,7 +2381,7 @@ def _render_chemical() -> None:
             )
             st.pyplot(fig)
             _pdf_download_button(
-                fig, "Top_15_Chemicals.pdf",
+                fig, "chemicals.pdf",
                 label="📥 PDF", engine="matplotlib", key="pdf_chem_bar"
             )
         else:
@@ -2242,7 +2415,7 @@ def _render_protein() -> None:
             )
             st.pyplot(fig)
             _pdf_download_button(
-                fig, "Top_15_Proteins_by_Degree.pdf",
+                fig, "proteins.pdf",
                 label="📥 PDF", engine="matplotlib", key="pdf_protein_deg"
             )
         else:
@@ -2281,18 +2454,16 @@ def _render_network() -> None:
             if len(sub_edges) == 0:
                 st.info("No edges in the top-100-node sub-network.")
             else:
-                # Build plotly network
-                # Assign positions with a simple layout
+                # Spring layout (deterministic) — much more readable than
+                # the old grid arrangement.
                 unique_nodes = list(
                     set(sub_edges["SourceNode"]) | set(sub_edges["TargetNode"])
                 )
-                node_idx = {n: i for i, n in enumerate(unique_nodes)}
-                # Simple grid layout
-                cols = int(np.ceil(np.sqrt(len(unique_nodes))))
-                pos = {
-                    n: (i % cols * 20, i // cols * 20)
-                    for n, i in node_idx.items()
-                }
+                pos = _fr_layout(
+                    [(row["SourceNode"], row["TargetNode"])
+                     for _, row in sub_edges.iterrows()],
+                    unique_nodes,
+                )
 
                 # Color by attribute
                 attr_map = dict(zip(sub_nodes["Key"], sub_nodes["Attribute"]))
@@ -2354,9 +2525,20 @@ def _render_network() -> None:
                 )
                 _apply_chinese_font(fig)
                 st.plotly_chart(fig, use_container_width=True)
+                # Vector PDF via the matplotlib twin: kaleido's bundled
+                # Chromium cannot launch inside the Docker container, so
+                # the plotly-engine export fails there.
                 _pdf_download_button(
-                    fig, "Network_Visualization.pdf",
-                    label="📥 PDF", key="pdf_network"
+                    _network_mpl_fig(
+                        unique_nodes, pos,
+                        [(row["SourceNode"], row["TargetNode"])
+                         for _, row in sub_edges.iterrows()],
+                        attr_map, color_map,
+                        f"Sub-network ({len(sub_edges)} edges, "
+                        f"{len(set(unique_nodes))} nodes)",
+                    ),
+                    "network.pdf",
+                    label="📥 PDF", engine="matplotlib", key="pdf_network"
                 )
 
             st.info(
@@ -2377,10 +2559,71 @@ def _render_formula_filter() -> None:
             st.info("Formula filtering is available in **Reverse** mode. "
                      "Switch to Reverse mode and specify a formula to filter by.")
         else:
-            st.info("No formula was specified. Enter TCM names in the sidebar "
-                     "and re-run to see filtered results.")
+            # Auto-suggest database formulas composed of the result herbs
+            # (以药测方): the reverse analysis tells us which herbs are
+            # active against the disease; formulas made of those herbs
+            # are candidate prescriptions.  Computed lazily on first
+            # visit and cached in the result dict.
+            sugg = result.get("formula_suggestions")
+            if sugg is None:
+                with st.spinner("Finding formulas composed of the result herbs..."):
+                    try:
+                        from jnuherb.analysis import suggest_formulas_from_tcms
+
+                        sugg = suggest_formulas_from_tcms(result.get("tcm"))
+                    except Exception as e:  # noqa: BLE001
+                        sugg = pd.DataFrame()
+                        st.caption(f"(suggestion lookup failed: {e})")
+                result["formula_suggestions"] = sugg
+
+            if sugg is not None and len(sugg) > 0:
+                st.markdown(
+                    "**Formulas composed of the result herbs** "
+                    "(以药测方) — click one to filter the network to its herbs:"
+                )
+                cols = st.columns(4)
+                for i, row in sugg.iterrows():
+                    with cols[i % 4]:
+                        if st.button(
+                            f"{row['name']}\n({row['matched']}/{row['total']})",
+                            key=f"ff_sugg_{row['HVPID']}",
+                            use_container_width=True,
+                            help="Herbs matched / formula composition size",
+                        ):
+                            node_keys = set(result["node"]["Key"].values)
+                            names = [n for n in row["matched_names"]
+                                     if n in node_keys]
+                            result["formula_filter"] = filter_formula_network(
+                                network=result["network"],
+                                node=result["node"],
+                                formula_names=names,
+                                include_proteins=True,
+                            )
+                            result["formula_filter_label"] = (
+                                f"{row['name']} ({row['matched']}/{row['total']})"
+                            )
+                            st.rerun()
+                st.caption(
+                    "Or enter specific TCM names in the sidebar "
+                    "(*🎛️ Formula filter & score* expander) and re-run."
+                )
+            else:
+                st.info("No database formula is composed mostly of the "
+                        "result herbs. Enter TCM names in the sidebar "
+                        "(*🎛️ Formula filter & score* expander) and re-run "
+                        "to filter by specific herbs.")
     else:
         ff = result["formula_filter"]
+        label = result.get("formula_filter_label")
+        if label:
+            c0, c1 = st.columns([3, 1])
+            with c0:
+                st.markdown(f"**Filtered by formula: {label}**")
+            with c1:
+                if st.button("✖ Clear filter", key="ff_clear"):
+                    result["formula_filter"] = None
+                    result.pop("formula_filter_label", None)
+                    st.rerun()
         c1, c2, c3 = st.columns(3)
         c1.metric("Found", len(ff.get("tcms_found", [])))
         c2.metric("Missing", len(ff.get("tcms_missing", [])))
@@ -2409,7 +2652,7 @@ def _render_degree() -> None:
             )
             st.pyplot(fig)
             _pdf_download_button(
-                fig, "Degree_by_Category.pdf",
+                fig, "degree.pdf",
                 label="📥 PDF", engine="matplotlib", key="pdf_degree_category"
             )
 
@@ -2548,9 +2791,13 @@ def _render_optimization() -> None:
                     fig.update_layout(xaxis_title="Combination Rank")
                     _apply_chinese_font(fig)
                     st.plotly_chart(fig, use_container_width=True)
+                    # matplotlib twin for the PDF (kaleido/Chromium fails
+                    # inside the container).
                     _pdf_download_button(
-                        fig, "TCM_Combination_Boost.pdf",
-                        label="📥 PDF", key="pdf_opt_tcm"
+                        _boost_mpl_fig(tcms_opt.head(20).reset_index(drop=True),
+                                       "TCM Combination Boost", "#00a65a"),
+                        "tcm_combination.pdf",
+                        label="📥 PDF", engine="matplotlib", key="pdf_opt_tcm"
                     )
                 else:
                     st.info("No TCM combination results.")
@@ -2569,9 +2816,13 @@ def _render_optimization() -> None:
                     fig.update_layout(xaxis_title="Combination Rank")
                     _apply_chinese_font(fig)
                     st.plotly_chart(fig, use_container_width=True)
+                    # matplotlib twin for the PDF (kaleido/Chromium fails
+                    # inside the container).
                     _pdf_download_button(
-                        fig, "Formula_Combination_Boost.pdf",
-                        label="📥 PDF", key="pdf_opt_fml"
+                        _boost_mpl_fig(fmls_opt.head(20).reset_index(drop=True),
+                                       "Formula Combination Boost", "#3c8dbc"),
+                        "formula_combination.pdf",
+                        label="📥 PDF", engine="matplotlib", key="pdf_opt_fml"
                     )
                 else:
                     st.info("No formula combination results.")
@@ -2822,7 +3073,7 @@ def _page_analysis() -> None:
     )
     is_forward = analysis_mode.startswith("🚀")
     if is_forward:
-        st.sidebar.caption("🚀 Forward: TCMs / Formulas / Monomers → Proteins")
+        st.sidebar.caption("🚀 Forward: Herbs / Formulas / Monomers → Proteins")
     else:
         st.sidebar.caption("🎯 Reverse: Disease / Target Proteins → Chemicals → TCMs → Formulas")
 
@@ -2861,45 +3112,52 @@ def _page_analysis() -> None:
         st.sidebar.subheader("Query Entity Type")
         forward_entity_type = st.sidebar.selectbox(
             "What are you searching for?",
-            ["TCM (Herb)", "Formula (方剂)", "Monomer (单体)"],
+            ["Herb (草药)", "Formula (方剂)", "Monomer (单体)"],
             key="forward_entity_type",
         )
 
-        if forward_entity_type == "TCM (Herb)":
+        if forward_entity_type == "Herb (草药)":
             forward_text = st.sidebar.text_area(
-                "TCM IDs or names (one per line)",
-                placeholder="HVM0367\nHVM1695\n柴胡\n黄芩",
+                "Herb names (one per line)",
+                placeholder="柴胡\n黄芩\nhuangqin\nskullcap",
                 height=110,
                 key="forward_text_tcm",
             )
             forward_id_type = st.sidebar.selectbox(
                 "ID Type",
-                ["HVMID", "cn_name", "pinyin_name", "en_name", "latin_name"],
-                help="HVMID=herb ID, cn_name=Chinese name, pinyin_name=Pinyin, "
+                ["cn_name", "pinyin_name", "en_name", "latin_name"],
+                help="cn_name=Chinese name, pinyin_name=Pinyin, "
                 "en_name=English name, latin_name=Latin name",
                 key="forward_id_type_tcm",
             )
         elif forward_entity_type == "Formula (方剂)":
             forward_text = st.sidebar.text_area(
-                "Formula IDs or names (one per line)",
-                placeholder="HVP1625\n右归丸\n小柴胡汤",
+                "Formula names (one per line)",
+                placeholder="右归丸\n小柴胡汤\nXiao Chai Hu Tang",
                 height=110,
                 key="forward_text_fml",
             )
             forward_id_type = st.sidebar.selectbox(
                 "ID Type",
-                ["HVPID", "Formula Name"],
-                help="HVPID=formula ID (e.g. HVP1625), Formula Name=search by name",
+                ["Formula Name", "Pinyin"],
+                help="Formula Name=Chinese/English name (e.g. 小柴胡汤), "
+                     "Pinyin=space-separated pinyin (e.g. Xiao Chai Hu Tang)",
                 key="forward_id_type_fml",
             )
         else:  # Monomer
             forward_text = st.sidebar.text_area(
-                "Chemical / Monomer names (one per line)",
-                placeholder="deoxyshikonin\nberberine\nquercetin",
+                "Chemical / Monomer names or PubChem IDs (one per line)",
+                placeholder="deoxyshikonin\nberberine\n5280345",
                 height=110,
                 key="forward_text_mono",
             )
-            forward_id_type = "Name"
+            forward_id_type = st.sidebar.selectbox(
+                "ID Type",
+                ["Name", "PubChem_id"],
+                help="Name=chemical name (e.g. berberine), "
+                     "PubChem_id=PubChem compound ID (e.g. 5280345)",
+                key="forward_id_type_mono",
+            )
 
         with st.sidebar.expander("🎛️ Filters (optional)", expanded=False):
             forward_proteins_text = st.text_area(
@@ -3104,14 +3362,19 @@ def _page_analysis() -> None:
                         # an "HVP" prefix is auto-detected as a formula there.
                         id_type_for_cache = "HVMID"
 
-                    if forward_id_type == "Formula Name":
+                    if forward_id_type in ("Formula Name", "Pinyin"):
                         from jnuherb._data import _load_table
 
                         fml_df = _load_table("jnuherb_formula")
                         all_hvpids = []
                         found, not_found = [], []
                         for name in entities:
-                            mask = fml_df["name"].str.contains(name, na=False, case=False)
+                            if forward_id_type == "Formula Name":
+                                mask = fml_df["name"].str.contains(
+                                    name, na=False, case=False, regex=False
+                                )
+                            else:
+                                mask = _formula_pinyin_mask(fml_df, name)
                             matches = fml_df[mask]
                             if len(matches) > 0:
                                 all_hvpids.extend(matches["HVPID"].tolist())
@@ -3122,10 +3385,10 @@ def _page_analysis() -> None:
                         if not_found:
                             st.warning(
                                 f"Formula name(s) not found: {', '.join(not_found)}. "
-                                f"Try using HVPID directly or a different name."
+                                f"Try a different spelling."
                             )
                         if not all_hvpids:
-                            st.error("No matching formulas found. Check the names or try HVPID.")
+                            st.error("No matching formulas found. Check the names.")
                             raise _AnalysisInputError()
 
                         entities_for_cache = list(set(all_hvpids))
@@ -3166,6 +3429,41 @@ def _page_analysis() -> None:
 
                         entities_for_cache = list(found.values())
                         id_type_for_cache = "Name"
+                        st.info(
+                            f"Found {len(entities_for_cache)} monomer(s) in the database: "
+                            f"{', '.join(entities_for_cache[:10])}"
+                            f"{'...' if len(entities_for_cache) > 10 else ''}"
+                        )
+
+                    # --- Monomer PubChem ID: validate existence before analysis ---
+                    if forward_id_type == "PubChem_id":
+                        from jnuherb.query import get_chemicals
+
+                        wanted = [str(e).strip() for e in entities]
+                        chem_df = get_chemicals("PubChem_id", wanted)
+                        found_ids = {str(c) for c in chem_df["PubChem_id"]}
+                        ok = [e for e in wanted if e in found_ids]
+                        not_found = [e for e in wanted if e not in found_ids]
+
+                        if not_found:
+                            if len(not_found) == len(wanted):
+                                st.error(
+                                    "The following PubChem ID(s) do not exist in this "
+                                    f"database: {', '.join(not_found)}. "
+                                    "Please check the IDs."
+                                )
+                                raise _AnalysisInputError()
+                            st.warning(
+                                "The following PubChem ID(s) were not found and will "
+                                f"be skipped: {', '.join(not_found)}. "
+                                f"Proceeding with: {', '.join(ok)}."
+                            )
+                        if not ok:
+                            st.error("No valid PubChem IDs found.")
+                            raise _AnalysisInputError()
+
+                        entities_for_cache = ok
+                        id_type_for_cache = "PubChem_id"
                         st.info(
                             f"Found {len(entities_for_cache)} monomer(s) in the database: "
                             f"{', '.join(entities_for_cache[:10])}"
@@ -3342,7 +3640,7 @@ def _page_analysis() -> None:
             st.sidebar.download_button(
                 label="📥 Download Network.csv",
                 data=(out_dir / "Network.csv").read_bytes() if (out_dir / "Network.csv").exists() else b"",
-                file_name="Network.csv",
+                file_name="network.csv",
                 mime="text/csv",
                 use_container_width=True,
             )
@@ -3407,13 +3705,381 @@ def _page_analysis() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Target Intersection — forward entities ∩ disease targets (Venn + subnetwork)
+# ---------------------------------------------------------------------------
+
+
+def _venn2_fig(
+    a_only: int, both: int, b_only: int,
+    label_a: str, label_b: str,
+    color_a: str = "#00a65a", color_b: str = "#3c8dbc",
+):
+    """Two-circle Venn (entity targets vs disease targets) as a
+    matplotlib figure — no matplotlib-venn dependency."""
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import Circle
+
+    fig, ax = plt.subplots(figsize=(7.2, 4.6))
+    ax.set_aspect("equal")
+    ax.axis("off")
+    r, d = 1.0, 1.15
+    ax.add_patch(Circle((-d / 2, 0), r, facecolor=color_a, alpha=0.45,
+                        edgecolor=color_a, lw=2))
+    ax.add_patch(Circle((d / 2, 0), r, facecolor=color_b, alpha=0.45,
+                        edgecolor=color_b, lw=2))
+    ax.text(-d / 2 - 0.42, 0, str(a_only), ha="center", va="center",
+            fontsize=16, fontweight="bold", color=color_a)
+    ax.text(0, 0, str(both), ha="center", va="center",
+            fontsize=20, fontweight="bold", color="#333333")
+    ax.text(d / 2 + 0.42, 0, str(b_only), ha="center", va="center",
+            fontsize=16, fontweight="bold", color=color_b)
+    ax.text(-d / 2, -r - 0.22, label_a, ha="center", va="top", fontsize=10)
+    ax.text(d / 2, -r - 0.22, label_b, ha="center", va="top", fontsize=10)
+    ax.set_xlim(-d / 2 - r - 0.3, d / 2 + r + 0.3)
+    ax.set_ylim(-r - 1.1, r + 0.4)
+    return fig
+
+
+def _render_isect_enrichment(result: dict) -> None:
+    """Enrichment for the intersection result — GO and KEGGG only (no
+    Disease Ontology).  Session keys are isect_-prefixed so results can
+    never contaminate or be contaminated by the main analysis page."""
+    st.subheader("🧬 Enrichment")
+    st.markdown("Based on the **intersected protein targets**.")
+    genes = extract_genes_from_result(result)
+    if not genes:
+        st.info("No protein genes available for enrichment.")
+        return
+    enr_kind = st.radio(
+        "Gene set collection", ["KEGG", "GO"], horizontal=True,
+        key="isect_enr_kind",
+    )
+    enr_key = f"isect_enr_{enr_kind.lower()}"
+    st.caption(f"{len(genes)} unique gene(s) from the intersected targets.")
+    if enr_key not in st.session_state:
+        with st.spinner(f"Running {enr_kind} enrichment..."):
+            st.session_state[enr_key] = run_enrichment(
+                genes, which=enr_kind.lower())
+    enr = st.session_state[enr_key]
+    if enr_kind == "GO":
+        st.write(
+            f"Gene mapping: {enr['go']['n_mapped']} / {enr['go']['n_input']} "
+            f"genes matched to GO background gene sets."
+        )
+        _display_go_enrichment(
+            enr["go"]["top"], enr["go"]["full"],
+            title="GO Enrichment (BP/CC/MF Top 3 each)",
+            download_key="isect_download_go",
+        )
+    else:
+        st.write(
+            f"Gene mapping: {enr['kegg']['n_mapped']} / {enr['kegg']['n_input']} "
+            f"genes matched to KEGG background gene sets."
+        )
+        _display_enrichment(
+            enr["kegg"]["top"], enr["kegg"]["full"],
+            "KEGG (Top 10)",
+            empty_msg="No KEGG terms found for the current gene set.",
+            download_key="isect_download_kegg",
+        )
+
+
+def _render_intersection() -> None:
+    """Forward entities ∩ disease targets: Venn diagram + filtered
+    network with the standard result tabs (no DO enrichment)."""
+    st.subheader("🎯 Target Intersection / 靶点交集")
+    st.markdown(
+        "Enter herbs / formulas / monomers **and** a disease.  The forward "
+        "targets are intersected with the disease-associated targets; the "
+        "overlapping sub-network is explored with the standard tabs below."
+    )
+
+    # ---- sidebar inputs ----
+    st.sidebar.subheader("🎯 Intersection Setup")
+    ent_type = st.sidebar.selectbox(
+        "Entity type",
+        ["Herb (草药)", "Formula (方剂)", "Monomer (单体)"],
+        key="isect_ent_type",
+    )
+    if ent_type == "Herb (草药)":
+        ent_text = st.sidebar.text_area(
+            "Herb names (one per line)", placeholder="柴胡\n黄芩",
+            height=100, key="isect_text",
+        )
+        id_type = st.sidebar.selectbox(
+            "ID Type", ["cn_name", "pinyin_name", "en_name", "latin_name"],
+            key="isect_id_type",
+        )
+    elif ent_type == "Formula (方剂)":
+        ent_text = st.sidebar.text_area(
+            "Formula names (one per line)",
+            placeholder="右归丸\nXiao Chai Hu Tang",
+            height=100, key="isect_text",
+        )
+        id_type = st.sidebar.selectbox(
+            "ID Type", ["Formula Name", "Pinyin"], key="isect_id_type",
+        )
+    else:
+        ent_text = st.sidebar.text_area(
+            "Monomer names / PubChem IDs (one per line)",
+            placeholder="berberine\n2353",
+            height=100, key="isect_text",
+        )
+        id_type = st.sidebar.selectbox(
+            "ID Type", ["Name", "PubChem_id"], key="isect_id_type",
+        )
+
+    disease = st.sidebar.text_input(
+        "Disease / 疾病", placeholder="e.g. osteoporosis · 高血压",
+        key="isect_disease",
+    )
+    # Monomers usually need a low score threshold, mirroring Forward mode.
+    _is_mono = ent_type == "Monomer (单体)"
+    _prev = st.session_state.get("_isect_prev_type")
+    if _prev != ent_type or "isect_score" not in st.session_state:
+        st.session_state.isect_score = 0 if _is_mono else 900
+    st.session_state._isect_prev_type = ent_type
+    score = st.sidebar.number_input(
+        "Combined Score Threshold", min_value=0, max_value=1000,
+        key="isect_score",
+    )
+    run = st.sidebar.button(
+        "🚀 Run Intersection", type="primary", use_container_width=True,
+        key="isect_run",
+    )
+
+    # ---- run ----
+    if run:
+        entities = parse_lines(ent_text)
+        disease_q = (disease or "").strip()
+        if not entities:
+            st.sidebar.error("Please enter at least one herb/formula/monomer.")
+        elif not disease_q:
+            st.sidebar.error("Please enter a disease name.")
+        else:
+            from jnuherb.analysis import resolve_disease_to_targets
+
+            try:
+                resolved = resolve_disease_to_targets(disease_q)
+            except Exception as e:  # noqa: BLE001
+                resolved = None
+                st.error(f"Disease lookup failed: {e}")
+            if resolved is not None and not resolved.get("targets"):
+                st.error(
+                    f"Could not resolve disease **{disease_q}** to any "
+                    "associated targets. Check the spelling or try English."
+                )
+                resolved = None
+            if resolved is not None:
+                out_dir = Path(tempfile.mkdtemp(prefix="jnuherb_isect_"))
+                try:
+                    with st.spinner("Running forward analysis..."):
+                        fwd = _run_forward(
+                            entities_tuple=tuple(entities),
+                            id_type=id_type,
+                            proteins_tuple=None,
+                            score=float(score),
+                            num=0,
+                            random_state=0,
+                            tcm_comp=False,
+                            fml_comp=False,
+                            output_dir=str(out_dir),
+                        )
+                except Exception as e:  # noqa: BLE001
+                    fwd = None
+                    st.error(f"Forward analysis failed: {e}")
+                if fwd is not None:
+                    with st.spinner("Intersecting with disease targets..."):
+                        _isect_run_intersection(fwd, resolved, entities,
+                                                ent_type, str(out_dir))
+                    st.rerun()
+
+    # ---- results ----
+    isect = st.session_state.get("isect")
+    if not isect:
+        st.info("👈 Set up the inputs in the sidebar and press "
+                "**🚀 Run Intersection**.")
+        return
+
+    resolved = isect["resolved"]
+    fwd_t: set = isect["fwd_targets"]
+    dis_t: set = isect["disease_targets"]
+    inter: set = isect["overlap"]
+    _tr = ""
+    if resolved.get("translated_from"):
+        _tr = f" (translated from **{resolved['translated_from']}**)"
+    st.markdown(
+        f"**{resolved['disease_name']}** ({resolved['disease_id']}){_tr} "
+        f"→ {len(dis_t)} disease targets · **{len(inter)} overlapping**"
+    )
+
+    # Venn
+    ent_label = isect["entity_type"].split(" ")[0]
+    vfig = _venn2_fig(
+        len(fwd_t - dis_t), len(inter), len(dis_t - fwd_t),
+        label_a=f"{ent_label} targets (n={len(fwd_t)})",
+        label_b=f"Disease targets (n={len(dis_t)})",
+    )
+    st.pyplot(vfig)
+    _pdf_download_button(
+        vfig, "intersection_venn.pdf", label="📥 PDF",
+        engine="matplotlib", key="pdf_isect_venn",
+    )
+
+    # CSV download: one row per intersected protein with its source
+    # monomers and the disease.
+    st.download_button(
+        "📥 Download intersected targets (CSV)",
+        data=isect["overlap_df"].to_csv(index=False).encode("utf-8"),
+        file_name="intersection_targets.csv",
+        mime="text/csv",
+        key="dl_isect_csv",
+    )
+    with st.expander("📋 Intersected targets table"):
+        st.dataframe(isect["overlap_df"], use_container_width=True)
+
+    if len(inter) == 0:
+        st.warning(
+            "No overlapping targets — try a lower Combined Score "
+            "Threshold or different inputs."
+        )
+        return
+
+    st.markdown("---")
+    st.markdown(f"**Sub-network through the {len(inter)} intersected targets**")
+
+    # Standard result tabs, rendered against the intersection result by
+    # temporarily swapping st.session_state.result.
+    res = isect["result"]
+    saved = st.session_state.get("result")
+    st.session_state.result = res
+    try:
+        tabs = st.tabs([
+            "🌿 TCM", "⚗️ Chemical", "🧬 Protein",
+            "🔗 Network", "📊 Degree", "🧬 Enrichment",
+        ])
+        with tabs[0]:
+            _render_tcm()
+        with tabs[1]:
+            _render_chemical()
+        with tabs[2]:
+            _render_protein()
+        with tabs[3]:
+            _render_network()
+        with tabs[4]:
+            _render_degree()
+        with tabs[5]:
+            _render_isect_enrichment(res)
+    finally:
+        if saved is None:
+            st.session_state.pop("result", None)
+        else:
+            st.session_state.result = saved
+
+
+def _isect_run_intersection(
+    fwd: dict, resolved: dict, entities: list[str],
+    ent_type: str, out_dir: str,
+) -> None:
+    """Restrict the forward result to disease targets, rebuild the
+    filtered sub-network and store everything in session state."""
+    from jnuherb.analysis import dfs_filter
+    from jnuherb.output import out_for_cyto, vis_network
+    from jnuherb.score import herbiv_score
+
+    pr = fwd["protein_result"]
+    dis_targets = set(resolved["targets"])
+    cpl_full = pr["chem_protein_links"]
+    fwd_targets = set(cpl_full["Ensembl_ID"].astype(str))
+    dis_targets = {str(t) for t in dis_targets}
+    inter = fwd_targets & dis_targets
+
+    cpl_i = cpl_full[cpl_full["Ensembl_ID"].astype(str).isin(dis_targets)].copy()
+
+    if len(cpl_i) > 0:
+        filt = dfs_filter(
+            pr.get("formula"), pr.get("formula_tcm_links"),
+            pr["tcm"], pr["tcm_chem_links"], pr["chem"], cpl_i,
+            pr["proteins"],
+        )
+        sr = herbiv_score(
+            filt["tcm"], filt["tcm_chem_links"], filt["chem"],
+            filt["chem_protein_links"],
+            formula=filt["formula"],
+            formula_tcm_links=filt["formula_tcm_links"],
+        )
+        trimmed = {
+            "formula": sr["formula_and_score"],
+            "formula_tcm_links": filt["formula_tcm_links"],
+            "tcm": sr["tcm_and_score"],
+            "tcm_chem_links": filt["tcm_chem_links"],
+            "chem": sr["chem_and_score"],
+            "chem_protein_links": filt["chem_protein_links"],
+            "proteins": filt["proteins"],
+        }
+        if len(trimmed["tcm_chem_links"]) > 0:
+            out_for_cyto(trimmed["tcm"], trimmed["tcm_chem_links"],
+                         trimmed["chem"], trimmed["chem_protein_links"],
+                         trimmed["proteins"], out_dir)
+            vis_network(trimmed["tcm"], trimmed["tcm_chem_links"],
+                        trimmed["chem"], trimmed["chem_protein_links"],
+                        trimmed["proteins"], out_dir)
+    else:
+        trimmed = {
+            k: pr.get(k) for k in (
+                "formula", "formula_tcm_links", "tcm", "tcm_chem_links",
+                "chem", "chem_protein_links", "proteins")
+        }
+
+    new_res = _build_network_results(trimmed, None, out_dir, is_forward=True)
+
+    # Overlap table: one row per intersected protein — source monomers
+    # (chemicals) and the disease.
+    chem = pr["chem"]
+    name_of_chem = dict(zip(chem["PubChem_id"].astype(str),
+                            chem["Name"].astype(str)))
+    proteins = pr["proteins"]
+    gene_of = dict(zip(proteins["Ensembl_ID"].astype(str),
+                       proteins.get("gene_name",
+                                    pd.Series([""] * len(proteins))).astype(str)))
+    cpl_full = cpl_full.assign(
+        Ensembl_ID=cpl_full["Ensembl_ID"].astype(str),
+        PubChem_id=cpl_full["PubChem_id"].astype(str),
+    )
+    rows = []
+    for ens in sorted(inter):
+        mono_ids = cpl_full.loc[cpl_full["Ensembl_ID"] == ens, "PubChem_id"]
+        monomers = sorted({name_of_chem.get(m, m) for m in mono_ids})
+        rows.append({
+            "Ensembl_ID": ens,
+            "gene_name": gene_of.get(ens, ""),
+            "monomers": "; ".join(monomers),
+            "disease_name": resolved["disease_name"],
+            "disease_id": resolved["disease_id"],
+        })
+    overlap_df = pd.DataFrame(rows)
+
+    st.session_state.isect = {
+        "result": new_res,
+        "resolved": resolved,
+        "fwd_targets": fwd_targets,
+        "disease_targets": dis_targets,
+        "overlap": inter,
+        "entities": entities,
+        "entity_type": ent_type,
+        "overlap_df": overlap_df,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Native navigation
 # ---------------------------------------------------------------------------
 _PAGES = {
-    "home": st.Page(_page_home, title="Research Home", icon="🏠"),
-    "analysis": st.Page(_page_analysis, title="Network Pharmacology", icon="🔗"),
-    "ai": st.Page(_render_ai, title="AI Consultation", icon="💬"),
+    "home": st.Page(_page_home, title="Home", icon="🏠"),
+    "ai": st.Page(_render_ai, title="Assistant", icon="💬"),
+    "analysis": st.Page(_page_analysis, title="NetPharm", icon="🔗"),
     "optimization": st.Page(_render_optimization, title="Optimization", icon="⚙️"),
+    "intersection": st.Page(_render_intersection, title="Overlap", icon="🎯"),
     "docking": st.Page(_render_docking, title="Docking", icon="🧪"),
 }
 

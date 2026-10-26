@@ -35,6 +35,85 @@ DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions"
 DEEPSEEK_MODEL = "deepseek-chat"
 
 # ---------------------------------------------------------------------------
+# Deployment configuration
+# ---------------------------------------------------------------------------
+# Built-in DeepSeek API key for this deployment.  When set to a real key,
+# visitors do not need to supply their own key in the UI (the API Settings
+# section is hidden).  WARNING: treat this file as private to the server —
+# anyone who can read it can extract and abuse the key.  When left empty,
+# the key falls back to the DEEPSEEK_API_KEY env var / Streamlit secrets.
+BUILTIN_API_KEY: str = ""
+
+# Fixed brand reply shown for identity / model questions and any input that
+# is unrelated to medicine — the assistant never engages with such topics.
+BRAND_REPLY: str = (
+    "I'm JNUHERB, an integrated platform for traditional Chinese medicine research. Please only ask questions related to medicine and healthcare."
+)
+
+# Matches questions about who/what the assistant is, in Chinese or English.
+_IDENTITY_RE = re.compile(
+    r"你是|你是谁|你叫|什么模型|哪个模型|你是ai|你是人工智能|机器人|"
+    r"chatgpt|gpt-?\d|claude|deepseek|llm|大模型|"
+    r"who are you|what (model|ai) are you|your name|introduce yourself|"
+    r"are you (an? )?(ai|robot|model|chatbot)",
+    re.IGNORECASE,
+)
+
+
+def is_identity_question(text: str) -> bool:
+    """True when the input asks who/what the assistant is (not medical)."""
+    return bool(_IDENTITY_RE.search(text or ""))
+
+
+def _strip_identity_clauses(text: str) -> str:
+    """Remove identity/model sub-clauses, keeping any medical content.
+
+    Mixed questions like "我失眠多梦，你是什么模型" keep the medical part
+    for normal consultation; the identity clause is silently dropped.
+    """
+    remainder = _IDENTITY_RE.sub(" ", text or "")
+    return remainder.strip(" 　，,。.!！?？;；、")
+
+
+def _brand_reply_result(quota: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+    """Well-formed consultation result carrying the fixed brand reply.
+
+    Shaped like a normal :func:`consult` result so the UI can display it
+    without special-casing, with ``identity_reply`` set as a marker.
+    ``quota`` (when given) is today's usage snapshot for the UI banner.
+    """
+    return {
+        "identity_reply": BRAND_REPLY,
+        "syndrome": {"zh": "JNUHERB", "en": "JNUHERB"},
+        "analysis": {"zh": BRAND_REPLY, "en": BRAND_REPLY},
+        "herbs": {"zh": [], "en": []},
+        "formulas": {"zh": [], "en": []},
+        "explanation": {"zh": "", "en": ""},
+        "raw_response": "",
+        "quota": quota,
+    }
+
+
+def _quota_exceeded_result(quota: dict[str, Any]) -> dict[str, Any]:
+    """Result returned when the shared daily question pool is exhausted.
+
+    Enforced server-side before any DeepSeek call, so exhausting the
+    quota never produces additional API cost.
+    """
+    from jnuherb.quota import QUOTA_EXHAUSTED_MESSAGE
+
+    return {
+        "quota_exceeded": QUOTA_EXHAUSTED_MESSAGE,
+        "syndrome": {"zh": "", "en": ""},
+        "analysis": {"zh": "", "en": ""},
+        "herbs": {"zh": [], "en": []},
+        "formulas": {"zh": [], "en": []},
+        "explanation": {"zh": "", "en": ""},
+        "raw_response": "",
+        "quota": quota,
+    }
+
+# ---------------------------------------------------------------------------
 # Bilingual symptom keyword expansion (Chinese → English synonyms)
 # ---------------------------------------------------------------------------
 _SYMPTOM_TRANSLATIONS = {
@@ -570,7 +649,9 @@ _STAGE1_PROMPT = """你是一位经验丰富的中医专家。用户会描述患
 1. 先辨八纲（阴阳、表里、寒热、虚实），再定脏腑气血定位；
 2. 证型名必须规范、完整（如 心脾两虚证、脾胃气虚证、肝郁气滞证、肾阴虚证）；
 3. 治法用规范术语，以四字结构为主（益气健脾/养血安神/清热化痰/疏肝解郁 等）；
-4. 本阶段只输出辨证结论，不要推荐方药。"""
+4. 本阶段只输出辨证结论，不要推荐方药；
+5. 若用户描述与疾病、症状、健康或中医药完全无关（闲聊、编程、数学、身份询问等），
+   不要强行辨证：syndrome 的 zh 固定填 "OFFTOPIC"，其余字段全部填空字符串或空列表。"""
 
 
 def _bilingual_field(parsed: dict[str, Any], key: str) -> dict[str, str]:
@@ -854,6 +935,29 @@ def consult(
         ValueError: If no API key is available.
         RuntimeError: If the API call fails.
     """
+    # Hard guard: identity / model questions never reach the LLM as-is.
+    # When embedded in a mixed message, the identity clause is stripped and
+    # any remaining medical content is still consulted; a message with
+    # nothing left after stripping gets the fixed brand reply.
+    if is_identity_question(symptoms):
+        remainder = _strip_identity_clauses(symptoms)
+        if len(remainder) < 4:
+            return _brand_reply_result()
+        symptoms = remainder
+
+    # ------------------------------------------------------------------
+    # Server-side daily quota (shared pool — the site has no user
+    # accounts).  Consumed here, BEFORE any DeepSeek call, so the limit
+    # cannot be bypassed from the browser and exhausted quota costs
+    # nothing.  Pure identity questions above never reach this point and
+    # therefore do not consume quota.
+    # ------------------------------------------------------------------
+    from jnuherb.quota import consume_quota
+
+    quota = consume_quota()
+    if not quota["allowed"]:
+        return _quota_exceeded_result(quota)
+
     api_key = _resolve_api_key(api_key)
 
     # ------------------------------------------------------------------
@@ -862,6 +966,11 @@ def consult(
     stage1 = infer_syndrome(
         symptoms, api_key=api_key, model=model, extra_context=extra_context
     )
+
+    # Model-judged guard: the stage-1 prompt asks for syndrome.zh == "OFFTOPIC"
+    # when the input has nothing to do with medicine/health.
+    if stage1.get("syndrome", {}).get("zh") == "OFFTOPIC":
+        return _brand_reply_result(quota=quota)
 
     # ------------------------------------------------------------------
     # Stage 2a: retrieve candidates. Herbs come from symptom keywords;
@@ -925,6 +1034,7 @@ def consult(
 
     parsed["raw_response"] = response
     parsed["candidates"] = candidates
+    parsed["quota"] = quota
     return parsed
 
 
@@ -1394,9 +1504,14 @@ def check_database(
 
 
 def _resolve_api_key(api_key: Optional[str]) -> str:
-    """Resolve API key from argument, env var, or Streamlit secrets."""
+    """Resolve API key from argument, builtin config, env var, or secrets."""
     if api_key:
         return api_key
+
+    # Deployment built-in key (takes precedence over env/secrets so the
+    # implanted key is what visitors actually use).
+    if BUILTIN_API_KEY:
+        return BUILTIN_API_KEY
 
     # Environment variable
     env_key = os.environ.get("DEEPSEEK_API_KEY")

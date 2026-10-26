@@ -25,11 +25,12 @@ def test_get_tcm():
 
 
 def test_get_chemicals():
-    df = get_chemicals("HVCID", ["HVC0001"])
-    assert len(df) >= 1
-    assert "HVCID" in df.columns
-    # Should be deduplicated on HVCID
-    assert df["HVCID"].is_unique
+    df = get_chemicals("PubChem_id", ["1032"])  # acetic acid
+    assert len(df) == 1
+    assert "PubChem_id" in df.columns
+    assert "HVCID" in df.columns  # provenance column kept
+    # Should be deduplicated on PubChem_id
+    assert df["PubChem_id"].is_unique
 
 
 def test_get_proteins():

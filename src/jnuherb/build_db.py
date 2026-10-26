@@ -57,6 +57,35 @@ def build_db(data_dir: Path | None = None) -> Path:
                         f'ON "{name}"("{col}")'
                     )
             meta_rows.append((name, len(df)))
+        # Case-insensitive index on the reverse-lookup name column: query.py
+        # matches disease names with COLLATE NOCASE, which a BINARY index
+        # cannot serve, and the table has ~1.7M rows.
+        conn.execute(
+            'CREATE INDEX IF NOT EXISTS '
+            '"ix_jnuherb_protein_disease_links_disease_name_ci" '
+            'ON "jnuherb_protein_disease_links"("disease_name" COLLATE NOCASE)'
+        )
+        # Pre-aggregated disease directory powering the reverse-lookup
+        # suggestion box: one row per distinct (disease_id, disease_name),
+        # so the UI's substring search scans ~17k rows instead of
+        # aggregating 1.7M on every keystroke.
+        conn.execute(
+            'CREATE TABLE IF NOT EXISTS "jnuherb_disease_lookup" AS '
+            'SELECT disease_id, disease_name, '
+            'COUNT(DISTINCT "Ensembl_ID") AS n_links, '
+            "MAX(CAST(NULLIF(score, '') AS REAL)) AS best_score, "
+            'GROUP_CONCAT(DISTINCT source) AS sources '
+            'FROM "jnuherb_protein_disease_links" '
+            'GROUP BY disease_id, disease_name'
+        )
+        conn.execute(
+            'CREATE INDEX IF NOT EXISTS "ix_jnuherb_disease_lookup_name" '
+            'ON "jnuherb_disease_lookup"("disease_name")'
+        )
+        conn.execute(
+            'CREATE INDEX IF NOT EXISTS "ix_jnuherb_disease_lookup_id" '
+            'ON "jnuherb_disease_lookup"("disease_id")'
+        )
         pd.DataFrame(meta_rows, columns=["table_name", "nrows"]).to_sql(
             "_meta", conn, index=False, if_exists="replace"
         )

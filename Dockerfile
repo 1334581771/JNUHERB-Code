@@ -17,17 +17,26 @@
 # free of compilers. Runtime boost libraries ARE still required (see stage 2).
 FROM python:3.11-slim AS dockbuilder
 
-# Same Aliyun Debian mirror as the runtime stage — this stage downloads the
-# most (full boost dev headers), so it must not hit deb.debian.org directly.
-RUN sed -i 's|http://deb.debian.org/debian|https://mirrors.aliyun.com/debian|g' /etc/apt/sources.list.d/debian.sources \
-    && sed -i 's|http://deb.debian.org/debian-security|https://mirrors.aliyun.com/debian-security|g' /etc/apt/sources.list.d/debian.sources \
+# China mirrors — override without editing the file, e.g.:
+#   docker compose build --build-arg APT_MIRROR=https://mirrors.aliyun.com
+ARG APT_MIRROR=https://mirrors.tuna.tsinghua.edu.cn
+ARG PIP_MIRROR=https://pypi.tuna.tsinghua.edu.cn/simple
+
+# vina links against only these boost libraries; installing the full
+# libboost-all-dev (~200 packages, ~700MB) is unnecessary and, on slow
+# links, costs hours. The -dev variants pull the matching binary runtime
+# packages of the same boost version.
+RUN sed -i "s|http://deb.debian.org/debian-security|${APT_MIRROR}/debian-security|g" /etc/apt/sources.list.d/debian.sources \
+    && sed -i "s|http://deb.debian.org/debian|${APT_MIRROR}/debian|g" /etc/apt/sources.list.d/debian.sources \
     && apt-get update \
     && apt-get install -y --no-install-recommends \
-       g++ swig libboost-all-dev \
+       g++ swig \
+       libboost-program-options-dev libboost-serialization-dev \
+       libboost-filesystem-dev libboost-system-dev libboost-thread-dev \
     && rm -rf /var/lib/apt/lists/*
 
 RUN pip wheel --no-cache-dir --wheel-dir /wheels \
-    -i https://mirrors.aliyun.com/pypi/simple/ \
+    -i "${PIP_MIRROR}" \
     "rdkit>=2023.3" "meeko>=0.5" "gemmi>=0.6" "scipy>=1.10" "prody>=2.4" \
     "py3Dmol>=2.0" "vina>=1.2.3"
 
@@ -39,8 +48,10 @@ LABEL org.opencontainers.image.description="TCM Network Pharmacology Analysis We
 LABEL org.opencontainers.image.version="0.1.0"
 
 # ---- System dependencies ----
-RUN sed -i 's|http://deb.debian.org/debian|https://mirrors.aliyun.com/debian|g' /etc/apt/sources.list.d/debian.sources \
-    && sed -i 's|http://deb.debian.org/debian-security|https://mirrors.aliyun.com/debian-security|g' /etc/apt/sources.list.d/debian.sources \
+# ARGs do not survive FROM, so redeclare here (same defaults as dockbuilder).
+ARG APT_MIRROR=https://mirrors.tuna.tsinghua.edu.cn
+RUN sed -i "s|http://deb.debian.org/debian-security|${APT_MIRROR}/debian-security|g" /etc/apt/sources.list.d/debian.sources \
+    && sed -i "s|http://deb.debian.org/debian|${APT_MIRROR}/debian|g" /etc/apt/sources.list.d/debian.sources \
     && apt-get update \
     && apt-get install -y --no-install-recommends curl fontconfig \
        # runtime boost libraries needed by the vina extension module
@@ -60,9 +71,9 @@ WORKDIR /home/jnuherb
 
 ENV PATH="/home/jnuherb/.local/bin:${PATH}"
 
-# Configure pip to use Aliyun mirror for faster builds inside China
-ENV PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
-ENV PIP_TRUSTED_HOST=mirrors.aliyun.com
+# Configure pip to use the China mirror for faster builds
+ARG PIP_MIRROR=https://pypi.tuna.tsinghua.edu.cn/simple
+ENV PIP_INDEX_URL=${PIP_MIRROR}
 ENV PIP_TIMEOUT=120
 ENV PIP_DEFAULT_TIMEOUT=120
 
@@ -77,6 +88,9 @@ RUN pip install --no-cache-dir --user \
     # pinned to the dev-tested version; the app relies on st.navigation,
     # st.logo and st.page_link (>=1.36/1.39) and AppTest-verified behaviour
     streamlit==1.58.0 \
+    # starlette>=1.4.0 breaks streamlit 1.58's vendored gzip middleware:
+    # /media/ responses lose http.response.start and all images fail to load
+    "starlette<1.4.0" \
     gseapy>=1.0.0 \
     requests>=2.28.0 \
     kaleido==0.2.1
@@ -95,7 +109,8 @@ RUN pip install --no-cache-dir --user /home/jnuherb/app/
 # drop the CSV copies (the app reads from the db; ensembl_uniprot.csv stays
 # because the docking module loads it directly).
 RUN python -m jnuherb.build_db && \
-    find /home/jnuherb/.local -path '*/jnuherb/data/jnuherb_*.csv' ! -name 'ensembl_uniprot.csv' -delete && \
+    find /home/jnuherb/.local -path '*/jnuherb/data/jnuherb_*.csv' \
+         ! -name 'ensembl_uniprot.csv' ! -name 'jnuherb_disease_aliases.csv' -delete && \
     rm -f /home/jnuherb/app/src/jnuherb/data/jnuherb_*.csv && \
     ls -lh /home/jnuherb/.local/lib/python3.11/site-packages/jnuherb/data/jnuherb.db
 

@@ -1,7 +1,12 @@
 """Tests for jnuherb.analysis."""
 
 import pytest
-from jnuherb.analysis import dfs_filter, from_proteins, from_tcm_or_formula
+from jnuherb.analysis import (
+    dfs_filter,
+    from_proteins,
+    from_tcm_or_formula,
+    suggest_formulas_from_tcms,
+)
 from jnuherb.query import (
     get_chem_protein_links,
     get_chemicals,
@@ -11,6 +16,30 @@ from jnuherb.query import (
     get_tcm,
     get_tcm_chem_links,
 )
+
+
+def test_suggest_formulas_from_tcms():
+    """The herbs of a known formula must re-suggest that formula at 100%
+    coverage (e.g. the 6 herbs of 小柴胡汤 HVP1625 → 小柴胡汤 6/6)."""
+    links = get_formula_tcm_links("HVPID", ["HVP1625"])
+    tcm = get_tcm("HVMID", list(links["HVMID"]))
+    sugg = suggest_formulas_from_tcms(tcm)
+    assert len(sugg) > 0
+    top = sugg.iloc[0]
+    assert top["name"] == "小柴胡汤"
+    assert top["matched"] == top["total"] == 6
+    assert top["coverage"] == 1.0
+    assert "柴胡" in top["matched_names"]
+    # Sorted by matched count descending.
+    assert list(sugg["matched"]) == sorted(sugg["matched"], reverse=True)
+
+
+def test_suggest_formulas_from_tcms_empty():
+    """No TCMs in → empty suggestions out, no exception."""
+    import pandas as pd
+
+    empty = suggest_formulas_from_tcms(pd.DataFrame())
+    assert len(empty) == 0
 
 
 def test_from_proteins_basic():
@@ -125,8 +154,8 @@ def test_dfs_filter():
     """DFS filter should prune nodes without complete pathways."""
     proteins = get_proteins("Ensembl_ID", ["ENSP00000381588", "ENSP00000252519"])
     chem_prot = get_chem_protein_links("Ensembl_ID", list(proteins["Ensembl_ID"]), 0)
-    chem = get_chemicals("HVCID", list(chem_prot["HVCID"]))
-    tcm_chem = get_tcm_chem_links("HVCID", list(chem["HVCID"]))
+    chem = get_chemicals("PubChem_id", list(chem_prot["PubChem_id"]))
+    tcm_chem = get_tcm_chem_links("PubChem_id", list(chem["PubChem_id"]))
     tcm = get_tcm("HVMID", list(tcm_chem["HVMID"]))
     fml_tcm = get_formula_tcm_links("HVMID", list(tcm["HVMID"]))
     fml = get_formula("HVPID", list(fml_tcm["HVPID"]))

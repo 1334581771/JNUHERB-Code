@@ -48,10 +48,10 @@ def herbiv_score(
 
     Args:
         tcm: TCM information (must have ``HVMID`` column).
-        tcm_chem_links: TCM-chemical links (``HVMID``, ``HVCID``).
-        chem: Chemical information (must have ``HVCID`` column).
+        tcm_chem_links: TCM-chemical links (``HVMID``, ``PubChem_id``).
+        chem: Chemical information (must have ``PubChem_id`` column).
         chem_protein_links: Chemical-protein links with
-            ``Combined_score`` in [0, 1] (must have ``HVCID``
+            ``Combined_score`` in [0, 1] (must have ``PubChem_id``
             and ``Ensembl_ID`` columns).
         formula: Optional formula information (``HVPID`` column).
         formula_tcm_links: Optional formula-TCM links.
@@ -72,8 +72,8 @@ def herbiv_score(
     proteins_id = list(chem_protein_links["Ensembl_ID"].unique())
 
     # --- pre-group for efficiency ---
-    cpl_grouped = chem_protein_links.groupby("HVCID")
-    tcl_grouped = tcm_chem_links.groupby("HVMID")["HVCID"].apply(set).to_dict()
+    cpl_grouped = chem_protein_links.groupby("PubChem_id")
+    tcl_grouped = tcm_chem_links.groupby("HVMID")["PubChem_id"].apply(set).to_dict()
 
     fml_tcm_map: dict[str, set] = {}
     if formula is not None and formula_tcm_links is not None:
@@ -91,7 +91,7 @@ def herbiv_score(
 
         # Chemical score
         chem_scores = []
-        for hvcid in chem_and_score["HVCID"]:
+        for hvcid in chem_and_score["PubChem_id"]:
             grp = cpl_grouped.get_group(hvcid) if hvcid in cpl_grouped.groups else None
             if grp is not None:
                 subset = grp.loc[grp["Ensembl_ID"] == protein, "Combined_score"]
@@ -101,7 +101,7 @@ def herbiv_score(
         chem_score_cols[score_col] = chem_scores
 
         # Cache chemical scores for TCM lookup
-        chem_score_series = pd.Series(chem_scores, index=chem_and_score["HVCID"])
+        chem_score_series = pd.Series(chem_scores, index=chem_and_score["PubChem_id"])
 
         # TCM score
         tcm_scores = []

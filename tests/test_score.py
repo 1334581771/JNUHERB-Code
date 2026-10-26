@@ -26,12 +26,12 @@ def test_herbiv_score_basic():
     """herbiv_score with synthetic data."""
     tcm = pd.DataFrame({"HVMID": ["M1", "M2"], "cn_name": ["TCM1", "TCM2"]})
     tcm_chem_links = pd.DataFrame(
-        {"HVMID": ["M1", "M1", "M2"], "HVCID": ["C1", "C2", "C2"]}
+        {"HVMID": ["M1", "M1", "M2"], "PubChem_id": ["C1", "C2", "C2"]}
     )
-    chem = pd.DataFrame({"HVCID": ["C1", "C2"], "Name": ["Chem1", "Chem2"]})
+    chem = pd.DataFrame({"PubChem_id": ["C1", "C2"], "Name": ["Chem1", "Chem2"]})
     chem_prot = pd.DataFrame(
         {
-            "HVCID": ["C1", "C2", "C1"],
+            "PubChem_id": ["C1", "C2", "C1"],
             "Ensembl_ID": ["P1", "P1", "P2"],
             "Combined_score": [0.5, 0.3, 0.8],
         }
@@ -60,10 +60,10 @@ def test_herbiv_score_with_formula():
     fml = pd.DataFrame({"HVPID": ["F1"], "name": ["Formula1"]})
     fml_tcm = pd.DataFrame({"HVPID": ["F1"], "HVMID": ["M1"]})
     tcm = pd.DataFrame({"HVMID": ["M1"], "cn_name": ["TCM1"]})
-    tcm_chem_links = pd.DataFrame({"HVMID": ["M1"], "HVCID": ["C1"]})
-    chem = pd.DataFrame({"HVCID": ["C1"], "Name": ["Chem1"]})
+    tcm_chem_links = pd.DataFrame({"HVMID": ["M1"], "PubChem_id": ["C1"]})
+    chem = pd.DataFrame({"PubChem_id": ["C1"], "Name": ["Chem1"]})
     chem_prot = pd.DataFrame(
-        {"HVCID": ["C1"], "Ensembl_ID": ["P1"], "Combined_score": [0.7]}
+        {"PubChem_id": ["C1"], "Ensembl_ID": ["P1"], "Combined_score": [0.7]}
     )
 
     result = herbiv_score(

@@ -38,11 +38,11 @@ _TABLE_FILES: dict[str, str] = {
 _ID_INDEXES: dict[str, list[str]] = {
     "jnuherb_formula": ["HVPID", "name"],
     "jnuherb_tcm": ["HVMID", "cn_name", "pinyin_name", "en_name"],
-    "jnuherb_chemicals": ["HVCID", "Name", "CAS_id", "PubChem_id"],
+    "jnuherb_chemicals": ["PubChem_id", "HVCID", "Name", "CAS_id"],
     "jnuherb_proteins": ["Ensembl_ID", "gene_name"],
     "jnuherb_formula_tcm_links": ["HVPID", "HVMID"],
-    "jnuherb_tcm_chemical_links": ["HVMID", "HVCID"],
-    "jnuherb_chemical_protein_links": ["HVCID", "Ensembl_ID"],
+    "jnuherb_tcm_chemical_links": ["HVMID", "PubChem_id"],
+    "jnuherb_chemical_protein_links": ["PubChem_id", "Ensembl_ID"],
     "jnuherb_protein_disease_links": ["Ensembl_ID", "disease_id", "disease_name"],
 }
 
