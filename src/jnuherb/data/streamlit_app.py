@@ -976,6 +976,46 @@ def _fr_layout(
             for name in nodes}
 
 
+def _three_ring_layout(
+    nodes: list[str],
+    attr_map: dict[str, str],
+) -> dict[str, tuple[float, float]]:
+    """Layout with three SEPARATED rings: Herb on the left, Chemicals in
+    the center, Proteins on the right — the three types never mix.
+    Nodes with an unknown attribute join the Chemicals ring."""
+    import math
+
+    groups: dict[str, list[str]] = {
+        "Herb": [], "Chemicals": [], "Proteins": [],
+    }
+    for n in nodes:
+        g = attr_map.get(n, "Chemicals")
+        g = {"TCM": "Herb"}.get(g, g)  # node Attribute uses "TCM"
+        if g not in groups:
+            g = "Chemicals"
+        groups[g].append(n)
+
+    radii = {g: min(280.0, max(70.0, 14.0 * len(ids) / math.pi))
+             for g, ids in groups.items()}
+    gap = 80.0
+    order = ["Herb", "Chemicals", "Proteins"]
+    width = 2 * sum(radii[g] for g in order) + 2 * gap + 120
+    height = 2 * max(radii.values()) + 150
+    cy = height / 2
+
+    pos: dict[str, tuple[float, float]] = {}
+    x = 60 + radii["Herb"]
+    for i, g in enumerate(order):
+        ids = groups[g]
+        r = radii[g]
+        for j, n in enumerate(ids):
+            ang = -math.pi / 2 + 2 * math.pi * j / max(1, len(ids))
+            pos[n] = (x + r * math.cos(ang), cy + r * math.sin(ang))
+        if i < len(order) - 1:
+            x += r + gap + radii[order[i + 1]]
+    return pos
+
+
 def _network_mpl_fig(
     nodes: list[str],
     pos: dict[str, tuple[float, float]],
@@ -2454,20 +2494,19 @@ def _render_network() -> None:
             if len(sub_edges) == 0:
                 st.info("No edges in the top-100-node sub-network.")
             else:
-                # Spring layout (deterministic) — much more readable than
-                # the old grid arrangement.
+                # Three separated rings (Herb / Chemicals / Proteins) so
+                # the node types never mix.
                 unique_nodes = list(
                     set(sub_edges["SourceNode"]) | set(sub_edges["TargetNode"])
                 )
-                pos = _fr_layout(
-                    [(row["SourceNode"], row["TargetNode"])
-                     for _, row in sub_edges.iterrows()],
-                    unique_nodes,
-                )
-
-                # Color by attribute
                 attr_map = dict(zip(sub_nodes["Key"], sub_nodes["Attribute"]))
-                color_map = {"TCM": "#1FA9E9", "Chemicals": "#f1c40f", "Proteins": "#e74c3c"}
+                # Display label: TCM -> Herb (the layout groups by these).
+                disp_attr = {k: ("Herb" if v == "TCM" else v)
+                             for k, v in attr_map.items()}
+                pos = _three_ring_layout(unique_nodes, disp_attr)
+
+                color_map = {"Herb": "#1FA9E9", "Chemicals": "#f1c40f",
+                             "Proteins": "#e74c3c"}
 
                 edge_x, edge_y = [], []
                 for _, row in sub_edges.iterrows():
@@ -2487,11 +2526,11 @@ def _render_network() -> None:
                 node_x = [pos[n][0] for n in unique_nodes if n in pos]
                 node_y = [pos[n][1] for n in unique_nodes if n in pos]
                 node_colors = [
-                    color_map.get(attr_map.get(n, ""), "#95a5a6")
+                    color_map.get(disp_attr.get(n, ""), "#95a5a6")
                     for n in unique_nodes if n in pos
                 ]
                 node_text = [
-                    f"{n}<br>{attr_map.get(n, '?')}<br>Degree: "
+                    f"{n}<br>{disp_attr.get(n, '?')}<br>Degree: "
                     f"{sub_nodes.loc[sub_nodes['Key']==n, 'Degree'].values[0] if n in sub_nodes['Key'].values else '?'}"
                     for n in unique_nodes if n in pos
                 ]
@@ -2511,16 +2550,29 @@ def _render_network() -> None:
                     textfont=dict(size=8),
                 )
 
+                # Legend-only traces (one per node type).
+                legend_traces = [
+                    go.Scatter(
+                        x=[None], y=[None], mode="markers",
+                        marker=dict(size=8, color=c),
+                        name=name, showlegend=True,
+                    )
+                    for name, c in color_map.items()
+                ]
+
                 fig = go.Figure(
-                    data=[edge_trace, node_trace],
+                    data=[edge_trace, node_trace] + legend_traces,
                     layout=go.Layout(
                         title=f"Sub-network ({len(sub_edges)} edges, {len(set(unique_nodes))} nodes)",
-                        showlegend=False,
+                        showlegend=True,
+                        legend=dict(orientation="h", yanchor="bottom", y=1.02,
+                                    x=1, xanchor="right"),
                         hovermode="closest",
                         margin=dict(b=20, l=5, r=5, t=40),
                         xaxis=dict(showgrid=False, zeroline=False, visible=False),
-                        yaxis=dict(showgrid=False, zeroline=False, visible=False),
-                        height=600,
+                        yaxis=dict(showgrid=False, zeroline=False, visible=False,
+                                   scaleanchor="x"),
+                        height=640,
                     ),
                 )
                 _apply_chinese_font(fig)
@@ -2533,7 +2585,7 @@ def _render_network() -> None:
                         unique_nodes, pos,
                         [(row["SourceNode"], row["TargetNode"])
                          for _, row in sub_edges.iterrows()],
-                        attr_map, color_map,
+                        disp_attr, color_map,
                         f"Sub-network ({len(sub_edges)} edges, "
                         f"{len(set(unique_nodes))} nodes)",
                     ),
@@ -3719,7 +3771,7 @@ def _venn2_fig(
     import matplotlib.pyplot as plt
     from matplotlib.patches import Circle
 
-    fig, ax = plt.subplots(figsize=(7.2, 4.6))
+    fig, ax = plt.subplots(figsize=(9, 6.2), dpi=150)
     ax.set_aspect("equal")
     ax.axis("off")
     r, d = 1.0, 1.15
@@ -3733,10 +3785,12 @@ def _venn2_fig(
             fontsize=20, fontweight="bold", color="#333333")
     ax.text(d / 2 + 0.42, 0, str(b_only), ha="center", va="center",
             fontsize=16, fontweight="bold", color=color_b)
-    ax.text(-d / 2, -r - 0.22, label_a, ha="center", va="top", fontsize=10)
-    ax.text(d / 2, -r - 0.22, label_b, ha="center", va="top", fontsize=10)
+    ax.text(-d / 2, -r - 0.18, label_a, ha="center", va="top", fontsize=11,
+            linespacing=1.4)
+    ax.text(d / 2, -r - 0.18, label_b, ha="center", va="top", fontsize=11,
+            linespacing=1.4)
     ax.set_xlim(-d / 2 - r - 0.3, d / 2 + r + 0.3)
-    ax.set_ylim(-r - 1.1, r + 0.4)
+    ax.set_ylim(-r - 1.25, r + 0.35)
     return fig
 
 
@@ -3795,7 +3849,7 @@ def _render_intersection() -> None:
     )
 
     # ---- sidebar inputs ----
-    st.sidebar.subheader("🎯 Intersection Setup")
+    st.sidebar.subheader("🎯 Overlap")
     ent_type = st.sidebar.selectbox(
         "Entity type",
         ["Herb (草药)", "Formula (方剂)", "Monomer (单体)"],
@@ -3914,11 +3968,10 @@ def _render_intersection() -> None:
     )
 
     # Venn
-    ent_label = isect["entity_type"].split(" ")[0]
     vfig = _venn2_fig(
         len(fwd_t - dis_t), len(inter), len(dis_t - fwd_t),
-        label_a=f"{ent_label} targets (n={len(fwd_t)})",
-        label_b=f"Disease targets (n={len(dis_t)})",
+        label_a=f"Herb\n(n={len(fwd_t)})",
+        label_b=f"Disease\n(n={len(dis_t)})",
     )
     st.pyplot(vfig)
     _pdf_download_button(
