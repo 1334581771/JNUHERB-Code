@@ -1105,20 +1105,30 @@ def _display_enrichment(
     empty_msg: str = "No enrichment terms found.",
     download_key: Optional[str] = None,
     show_dot: bool = True,
+    show_relevance: bool = True,
 ) -> None:
-    """Render an enrichment result: table (top N), download CSV (full), bar + dot plots."""
+    """Render an enrichment result: table (top N), download CSV (full), bar + dot plots.
+
+    ``show_relevance=False`` (used for KEGG) keeps the topic-relevance
+    ordering but hides the Core/Related/Review tier labels and the KEGG
+    BRITE class column from both the table and the CSV download.
+    """
     st.markdown(f"#### {title}")
     if top_df.empty:
         st.info(empty_msg)
         return
 
     # Show top N table
-    display_cols = [c for c in ["Term", "Category", "Count", "GeneRatio", "P-value", "Adjusted P-value", "Genes"] if c in top_df.columns]
+    display_cols = [c for c in ["Term", "Category", "Relevance", "KEGG Class", "Count", "GeneRatio", "P-value", "Adjusted P-value", "Genes"] if c in top_df.columns]
+    if not show_relevance:
+        display_cols = [c for c in display_cols if c not in ("Relevance", "KEGG Class")]
     st.dataframe(top_df[display_cols], use_container_width=True, hide_index=True)
 
     # CSV download of FULL results
     if not full_df.empty:
-        full_display_cols = [c for c in ["Term", "Category", "Count", "GeneRatio", "P-value", "Adjusted P-value", "Genes"] if c in full_df.columns]
+        full_display_cols = [c for c in ["Term", "Category", "Relevance", "KEGG Class", "Count", "GeneRatio", "P-value", "Adjusted P-value", "Genes"] if c in full_df.columns]
+        if not show_relevance:
+            full_display_cols = [c for c in full_display_cols if c not in ("Relevance", "KEGG Class")]
         csv = full_df[full_display_cols].to_csv(index=False).encode("utf-8")
         st.download_button(
             label="📥 Download all results (CSV)",
@@ -1184,12 +1194,12 @@ def _display_go_enrichment(
         full_df["Term"] = full_df["Term"].apply(_clean_go_term)
 
     # Combined table with Category column
-    display_cols = [c for c in ["Term", "Category", "Count", "GeneRatio", "P-value", "Adjusted P-value", "Genes"] if c in top_df.columns]
+    display_cols = [c for c in ["Term", "Category", "Relevance", "Count", "GeneRatio", "P-value", "Adjusted P-value", "Genes"] if c in top_df.columns]
     st.dataframe(top_df[display_cols], use_container_width=True, hide_index=True)
 
     # CSV download of FULL results
     if not full_df.empty:
-        full_display_cols = [c for c in ["Term", "Category", "Count", "GeneRatio", "P-value", "Adjusted P-value", "Genes"] if c in full_df.columns]
+        full_display_cols = [c for c in ["Term", "Category", "Relevance", "Count", "GeneRatio", "P-value", "Adjusted P-value", "Genes"] if c in full_df.columns]
         csv = full_df[full_display_cols].to_csv(index=False).encode("utf-8")
         st.download_button(
             label="📥 Download all GO results (CSV)",
@@ -1653,6 +1663,27 @@ def _build_network_results(
             ),
         })
 
+    # SCI-friendly display: show herbs by pinyin instead of Chinese names.
+    # Applied consistently to edges and node keys (before the formula
+    # filter and degree computation), so the on-screen network figure, the
+    # degree charts, the matplotlib PDF twins, and the CSV downloads all
+    # agree.  Herbs whose pinyin collides with another herb keep their
+    # Chinese name to avoid merging two nodes.
+    tcm_disp = api_result.get("tcm", pd.DataFrame())
+    if len(tcm_disp) > 0 and {"cn_name", "pinyin_name"} <= set(tcm_disp.columns):
+        raw_map = {}
+        for cn, py in zip(tcm_disp["cn_name"], tcm_disp["pinyin_name"]):
+            if cn and py:
+                raw_map[cn] = py.strip().title()
+        dupes = {p for p in raw_map.values() if list(raw_map.values()).count(p) > 1}
+        pin_map = {c: p for c, p in raw_map.items() if c != p and p not in dupes}
+        if pin_map:
+            network["SourceNode"] = network["SourceNode"].map(
+                lambda s: pin_map.get(s, s))
+            network["TargetNode"] = network["TargetNode"].map(
+                lambda s: pin_map.get(s, s))
+            node["Key"] = node["Key"].map(lambda s: pin_map.get(s, s))
+
     # Formula filter (reverse mode only)
     formula_filter = None
     if formula_filter_names and not is_forward:
@@ -1975,36 +2006,8 @@ def _render_overview() -> None:
     is_fwd = result.get("is_forward", False) if result else False
     pr = result["protein_result"]
     ff = result["formula_filter"]
-    run_info = st.session_state.get("run_info") or {}
 
     st.subheader("📋 Analysis Summary")
-
-    # Case line: mode, run id, timestamp
-    _case_bits = [f"**{'Forward' if is_fwd else 'Reverse'}** mode"]
-    if run_info.get("run_id"):
-        _case_bits.append(f"run `{run_info['run_id']}`")
-    if run_info.get("started_at"):
-        _case_bits.append(run_info["started_at"][:19].replace("T", " "))
-    st.caption(" · ".join(_case_bits))
-
-    # Input echo (what was actually analyzed)
-    _inp = run_info.get("input")
-    if _inp:
-        if isinstance(_inp, dict):
-            _in_bits = []
-            if _inp.get("disease"):
-                _d = f"Disease: **{_inp['disease']}**"
-                if _inp.get("disease_id"):
-                    _d += f" ({_inp['disease_id']})"
-                _in_bits.append(_d)
-            if _inp.get("proteins"):
-                _in_bits.append(f"Proteins: {', '.join(map(str, _inp['proteins'][:10]))}"
-                                + (" …" if len(_inp["proteins"]) > 10 else ""))
-        else:
-            _in_bits = [f"Input: {', '.join(map(str, _inp[:10]))}"
-                        + (" …" if len(_inp) > 10 else "")]
-        if _in_bits:
-            st.markdown(" · ".join(_in_bits))
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("TCMs", len(pr.get("tcm", [])))
@@ -2016,26 +2019,6 @@ def _render_overview() -> None:
         c4.metric("Formulas Found", len(pr.get("formula", [])))
     else:
         c4.metric("Network Edges", len(result["network"]))
-
-    # Run parameters, collapsed by default
-    _params = run_info.get("parameters")
-    if _params:
-        with st.expander("⚙️ Run parameters"):
-            st.json(_params)
-
-    st.markdown("---")
-    st.subheader("Analysis Log")
-    log_lines = [
-        f"✅ Analysis completed!",
-        f"Mode: {'Forward' if is_fwd else 'Reverse'}",
-        f"TCMs: {len(pr.get('tcm', []))}",
-        f"Chemicals: {len(pr.get('chem', []))}",
-        f"Proteins: {len(pr.get('proteins', []))}",
-        f"Network edges: {len(result['network'])}",
-    ]
-    if ff:
-        log_lines.append(f"Formula TCMs found: {len(ff.get('tcms_found', []))}")
-    st.code("\n".join(log_lines), language=None)
 
     st.caption("Next: explore per-entity tables in the **🌿 TCM / ⚗️ Chemical "
                "/ 🧬 Protein** tabs, the **🔗 Network**, **🧬 Enrichment** "
@@ -2321,8 +2304,24 @@ def _render_tcm() -> None:
                 color="#8CC6ED",
             )
             st.pyplot(fig)
+            # SCI-friendly PDF twin: pinyin y labels (screen chart keeps
+            # Chinese names for readability alongside the table).
+            if "pinyin_name" in tcm_disp.columns:
+                pdf_df = tcm_disp.head(15).copy()
+                pdf_df[y_col] = (pdf_df["pinyin_name"].astype(str)
+                                 .str.strip().str.title())
+                fig_pdf = _plot_top_n_barh(
+                    pdf_df,
+                    x="Importance Score",
+                    y=y_col,
+                    title="Top 15 Herbs",
+                    xlabel="Importance Score",
+                    color="#8CC6ED",
+                )
+            else:
+                fig_pdf = fig
             _pdf_download_button(
-                fig, "herbs.pdf",
+                fig_pdf, "herbs.pdf",
                 label="📥 PDF", engine="matplotlib", key="pdf_tcm_bar"
             )
         else:
@@ -2730,24 +2729,40 @@ def _render_enrichment() -> None:
         if not genes:
             st.info("No protein genes available for enrichment.")
         else:
-            # Parameterized page: one enrichment collection is selected and
-            # computed on demand (P1-10) — switching collections never
-            # recomputes the others, and nothing runs until the user picks
-            # a collection after the analysis completes.
+            # Disease-seeded reverse runs get KEGG/GO enrichment only —
+            # a disease-derived gene list fed back into a disease collection
+            # is circular.  The Disease collection stays available for
+            # manually entered protein lists (and in Forward mode).
+            run_info = st.session_state.get("run_info") or {}
+            rev_input = run_info.get("input") or {}
+            disease_seeded = (not is_fwd) and bool(rev_input.get("disease"))
+            options = ["KEGG", "GO"] if disease_seeded else ["Disease", "KEGG", "GO"]
+            prev_kind = st.session_state.get("enr_kind")
+            if prev_kind not in options:
+                st.session_state.enr_kind = options[0]
             enr_kind = st.radio(
                 "Gene set collection",
-                ["Disease", "KEGG", "GO"],
+                options,
                 horizontal=True,
                 key="enr_kind",
             )
             enr_key = f"enr_{enr_kind.lower()}"
             st.caption(f"{len(genes)} unique gene(s) extracted from Protein Results.")
+            # Research topic for relevance-tiered ranking: the resolved
+            # disease name in disease-seeded reverse runs.
+            topic = rev_input.get("disease_name") if disease_seeded else None
             if enr_key not in st.session_state:
                 with st.spinner(f"Running {enr_kind} enrichment..."):
                     st.session_state[enr_key] = run_enrichment(
-                        genes, which=enr_kind.lower())
+                        genes, which=enr_kind.lower(), topic=topic)
 
             enr = st.session_state[enr_key]
+            if topic:
+                st.caption(
+                    "Terms most relevant to the research topic "
+                    f"**{topic}** are shown first; the complete result "
+                    "set is preserved in the CSV download."
+                )
             if enr_kind == "GO":
                 st.write(
                     f"Gene mapping: {enr['go']['n_mapped']} / {enr['go']['n_input']} "
@@ -2773,6 +2788,7 @@ def _render_enrichment() -> None:
                     f"{enr_kind} (Top 10)",
                     empty_msg=f"No {enr_kind} terms found for the current gene set.",
                     download_key=f"download_{block}",
+                    show_relevance=(enr_kind != "KEGG"),
                 )
 
 
@@ -3614,6 +3630,7 @@ def _page_analysis() -> None:
 
                     run_meta["input"] = {
                         "disease": disease_query or None,
+                        "disease_name": (resolved or {}).get("disease_name") or None,
                         "disease_id": (resolved or {}).get("disease_id") or None,
                         "proteins": None if (resolved and resolved["targets"])
                                     else list(proteins),
@@ -3696,30 +3713,6 @@ def _page_analysis() -> None:
                 mime="text/csv",
                 use_container_width=True,
             )
-
-    # Results provenance bar: binds the tabs to the run that
-    # produced them; turns amber when sidebar inputs drift.
-    if result is not None:
-        _ri = st.session_state.get("run_info") or {}
-        _mode_lbl = "🚀 Forward" if is_fwd else "🎯 Reverse"
-        _ts = ""
-        if _ri.get("started_at"):
-            _ts = _ri["started_at"][:19].replace("T", " ") + " UTC"
-        _snap = _ri.get("sidebar_snapshot")
-        _stale = _snap is not None and _sidebar_snapshot() != _snap
-        _cls = "jnu-runbar jnu-runbar-stale" if _stale else "jnu-runbar"
-        _note = (
-            "Inputs changed since this run — results below reflect the "
-            "earlier submission. Re-run to update."
-            if _stale else
-            "Results on all tabs below belong to this run."
-        )
-        st.markdown(
-            f'<div class="{_cls}"><span class="jnu-runbar-mode">{_mode_lbl}</span>'
-            f'<span>run <span class="jnu-runbar-id">{_ri.get("run_id", "?")}</span></span>'
-            f"<span>{_ts}</span><span>·</span><span>{_note}</span></div>",
-            unsafe_allow_html=True,
-        )
 
     if result is None:
         st.info("👈 Set up the analysis in the sidebar and press **🚀 Run "
@@ -3810,10 +3803,13 @@ def _render_isect_enrichment(result: dict) -> None:
     )
     enr_key = f"isect_enr_{enr_kind.lower()}"
     st.caption(f"{len(genes)} unique gene(s) from the intersected targets.")
+    # Research topic for relevance-tiered ranking: the Overlap disease.
+    _isect = st.session_state.get("isect") or {}
+    topic = ((_isect.get("resolved") or {}).get("disease_name"))
     if enr_key not in st.session_state:
         with st.spinner(f"Running {enr_kind} enrichment..."):
             st.session_state[enr_key] = run_enrichment(
-                genes, which=enr_kind.lower())
+                genes, which=enr_kind.lower(), topic=topic)
     enr = st.session_state[enr_key]
     if enr_kind == "GO":
         st.write(
@@ -3835,6 +3831,7 @@ def _render_isect_enrichment(result: dict) -> None:
             "KEGG (Top 10)",
             empty_msg="No KEGG terms found for the current gene set.",
             download_key="isect_download_kegg",
+            show_relevance=False,
         )
 
 
