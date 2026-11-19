@@ -13,6 +13,9 @@ cd /path/to/jnuherb
 pip install -e .
 ```
 
+> **This repository contains source code only.** The data tables are not
+> distributed here — see [Data](#data) before running an analysis.
+
 ### Dependencies
 
 - pandas >= 1.5
@@ -136,7 +139,12 @@ The Streamlit app provides:
 |----------|-------------|
 | `launch_app(port, host)` | Launch Streamlit web app |
 
-## Database
+## Data
+
+This repository ships **source code only**. The relational tables, the
+enrichment libraries, the syndrome profiles and the bundled CJK font are not
+part of the source tree, and the MIT license below does **not** cover any
+dataset.
 
 | Dataset | Records |
 |---------|---------|
@@ -148,6 +156,34 @@ The Streamlit app provides:
 | jnuherb_tcm_chemical_links | ~60,600 |
 | jnuherb_chemical_protein_links | ~450,800 |
 
+To run an analysis, place the tables in `src/jnuherb/data/` — or point
+`JNUHERB_DATA_DIR` at any directory that holds them:
+
+```bash
+export JNUHERB_DATA_DIR=/path/to/jnuherb-data
+```
+
+Expected file names (see `_TABLE_FILES` in `src/jnuherb/_data.py`):
+
+```
+jnuherb_formula.csv              jnuherb_formula_tcm_links.csv
+jnuherb_tcm.csv                  jnuherb_tcm_chemical_links.csv
+jnuherb_chemicals.csv            jnuherb_chemical_protein_links.csv
+jnuherb_proteins.csv             jnuherb_protein_disease_links.csv.gz
+```
+
+Optional extras: `data/enrichment/*.gmt` (+ `kegg_brite.tsv`) for enrichment
+analysis, `data/fonts/NotoSansCJKsc-Regular.otf` for CJK output in exported
+figures, and `data/*.json` for syndrome profiles.
+
+Once the CSV tables are in place you can build the indexed SQLite backend
+(faster queries, optional):
+
+```bash
+python -m jnuherb.build_db
+```
+
 ## License
 
-MIT
+MIT — for the source code. Data is not distributed with this repository and
+carries its own terms.

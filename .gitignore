@@ -30,3 +30,26 @@ JNUHERB_SCI_manuscript*.md
 JNUHERB_SCI_manuscript*.pdf
 jnuherb_sci*.md
 herb.pdf
+
+# ---------------------------------------------------------------------------
+# Data is not distributed with this repository (code only)
+# ---------------------------------------------------------------------------
+# Data tables, enrichment libraries, the bundled CJK font and ingest sources
+# are kept out of version control. Place them in src/jnuherb/data/ (or point
+# JNUHERB_DATA_DIR at them) before running an analysis. See README "Data".
+src/jnuherb/data/*.csv
+src/jnuherb/data/*.csv.gz
+src/jnuherb/data/*.json
+src/jnuherb/data/enrichment/
+src/jnuherb/data/fonts/
+data_ingest/
+database/
+design/svg/
+sci/
+
+# Local tooling and generated artifacts
+.wisp/
+*.pdf
+*.docx
+*.pptx
+*.tif
