@@ -37,11 +37,10 @@ DEEPSEEK_MODEL = "deepseek-chat"
 # ---------------------------------------------------------------------------
 # Deployment configuration
 # ---------------------------------------------------------------------------
-# Built-in DeepSeek API key for this deployment.  When set to a real key,
-# visitors do not need to supply their own key in the UI (the API Settings
-# section is hidden).  WARNING: treat this file as private to the server —
-# anyone who can read it can extract and abuse the key.  When left empty,
-# the key falls back to the DEEPSEEK_API_KEY env var / Streamlit secrets.
+# Built-in DeepSeek API key.  NEVER commit a real key here: this file is
+# part of a public repository.  Leave it empty and supply the key through the
+# DEEPSEEK_API_KEY environment variable or Streamlit secrets instead (see
+# .env.example).  When empty, the key falls back to those sources.
 BUILTIN_API_KEY: str = ""
 
 # Fixed brand reply shown for identity / model questions and any input that
