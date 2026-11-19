@@ -246,12 +246,12 @@ def _example_dialog() -> None:
         "Verified example workflows. Inputs and parameters are prefilled — "
         "press **🚀 Run Analysis** in the sidebar to reproduce."
     )
-    if st.button("🍵 Gui Pi Decoction · Forward (HVP5811, score ≥ 900)",
+    if st.button("🍵 Gui Pi Decoction · Forward (归脾汤, score ≥ 900)",
                  use_container_width=True):
         st.session_state.pending_prefill = {
             "mode": "🚀 Forward",
             "widgets": {"forward_entity_type": "Formula (方剂)",
-                        "forward_text_fml": "HVP5811"},
+                        "forward_text_fml": "归脾汤"},
         }
         st.rerun()
     if st.button("🫁 Lung cancer · Reverse (MONDO:0008903, score ≥ 0.1, "
@@ -1953,7 +1953,7 @@ def _page_home() -> None:
             st.session_state.pending_prefill = {
                 "mode": "🚀 Forward",
                 "widgets": {"forward_entity_type": "Formula (方剂)",
-                            "forward_text_fml": "HVP5811"},
+                            "forward_text_fml": "归脾汤"},
             }
             st.switch_page(_PAGES["analysis"])
     with e2:
@@ -1984,16 +1984,18 @@ def _page_home() -> None:
 
         **Forward mode** (TCMs / Formulas / Monomers → Proteins):
         1. Select *🚀 Forward* and choose an entity type.
-        2. **TCM**: herb IDs or names (e.g. 柴胡, HVM0367) ·
-           **Formula**: HVP1625, 右归丸 · **Monomer**: deoxyshikonin.
+        2. **TCM**: 中文 / English / pinyin / latin name
+           (e.g. 柴胡, huangqin, skullcap) ·
+           **Formula**: 中文 or pinyin (e.g. 右归丸, You Gui Wan) ·
+           **Monomer**: name or PubChem_id (e.g. deoxyshikonin, 5280345).
         3. Optionally restrict to specific proteins and set a score
            threshold (expand **Filters**).
         4. Click **🚀 Run Analysis**.
 
         ---
         **Example — Reverse (gene names):** `TNF, IL6, TP53, PDCD1`
-        **Example — Forward TCM:** `HVM0367, HVM1695` or `柴胡, 黄芩`
-        **Example — Forward Formula:** `HVP1625` or `右归丸`
+        **Example — Forward TCM:** `柴胡, 黄芩` or `huangqin, skullcap`
+        **Example — Forward Formula:** `右归丸` or `You Gui Wan`
         **Example — Forward Monomer:** `deoxyshikonin, berberine`
 
         > ℹ️ The protein database contains ~14,200 proteins with known
